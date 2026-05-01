@@ -317,6 +317,9 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
     streamable_http_path="/",
+    # FastMCP validates incoming Host headers against this host/port pair.
+    host="kroger-mcp",
+    port=8000,
 )
 
 
@@ -448,7 +451,18 @@ async def lifespan(_: FastAPI):
         yield
 
 
-fastapi = FastAPI(title="CraveCart Kroger MCP", lifespan=lifespan)
+# Starlette/HostHeaderMiddleware can be strict about Host header values.
+# In Docker, the client sends Host like `kroger-mcp:8000`, so we allow those.
+fastapi = FastAPI(
+    title="CraveCart Kroger MCP",
+    lifespan=lifespan,
+    allowed_hosts=[
+        "localhost",
+        "127.0.0.1",
+        "kroger-mcp",
+        "kroger-mcp:8000",
+    ],
+)
 fastapi.mount("/mcp", mcp_app)
 
 
@@ -476,13 +490,15 @@ def auth_start(x_cravecart_session: str | None = Header(default=None)) -> dict[s
     session["oauth_state"] = state
     save_session_data(session_id, session)
 
-    auth_url = f"{AUTH_URL}?{urlencode({
-        'response_type': 'code',
-        'client_id': env('KROGER_CLIENT_ID'),
-        'redirect_uri': env('KROGER_REDIRECT_URI'),
-        'scope': 'cart.basic:write profile.compact',
-        'state': state,
-    })}"
+    # Build the OAuth URL in steps to avoid f-string/braces parsing issues.
+    params = {
+        "response_type": "code",
+        "client_id": env("KROGER_CLIENT_ID"),
+        "redirect_uri": env("KROGER_REDIRECT_URI"),
+        "scope": "cart.basic:write profile.compact",
+        "state": state,
+    }
+    auth_url = f"{AUTH_URL}?{urlencode(params)}"
 
     return {"authUrl": auth_url}
 
