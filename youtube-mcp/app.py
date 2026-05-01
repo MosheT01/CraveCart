@@ -289,6 +289,9 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
     streamable_http_path="/",
+    # FastMCP validates incoming Host headers against this host/port pair.
+    host="youtube-mcp",
+    port=8100,
 )
 
 
@@ -347,7 +350,18 @@ async def lifespan(_: FastAPI):
         yield
 
 
-fastapi = FastAPI(title="CraveCart YouTube MCP", lifespan=lifespan)
+# Starlette/HostHeaderMiddleware can be strict about Host header values.
+# In Docker, the client sends Host like `youtube-mcp:8100`, so we allow those.
+fastapi = FastAPI(
+    title="CraveCart YouTube MCP",
+    lifespan=lifespan,
+    allowed_hosts=[
+        "localhost",
+        "127.0.0.1",
+        "youtube-mcp",
+        "youtube-mcp:8100",
+    ],
+)
 fastapi.mount("/mcp", mcp_app)
 
 
