@@ -1,0 +1,42 @@
+# Local tooling and editor state
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.sixth/
+.v0-trash/
+.vercel/
+next.user-config.*
+
+# Secrets and local environment
+.env
+.env*.local
+
+# Dependencies and build output
+node_modules/
+.next/
+coverage/
+dist/
+tsconfig.tsbuildinfo
+
+# Local runtime and cache data
+.runtime/
+.tmp-*
+kroger-mcp/data/
+youtube-mcp/data/
+__pycache__/
+*.py[cod]
+.venv/
+kroger-mcp/.venv/
+youtube-mcp/.venv/
+
+# Logs
+*.log
+*.out.log
+*.err.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS noise
+.DS_Store
+Thumbs.db

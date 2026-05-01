@@ -1,0 +1,12 @@
+node_modules
+.next
+coverage
+dist
+.runtime
+.sixth
+*.log
+kroger-mcp/data
+youtube-mcp/data
+kroger-mcp/.venv
+youtube-mcp/.venv
+.env
