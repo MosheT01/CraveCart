@@ -1,117 +1,467 @@
 # CraveCart Architecture
 
-## Overview
+CraveCart is a chat-first grocery agent that sits between a browser UI, Gemini, YouTube context, and Kroger cart APIs. The system is intentionally small, but it is not a monolith: the web app is the agent host, while YouTube and Kroger each live behind their own MCP boundary.
 
-CraveCart is a chat-first food and grocery agent built as a small multi-service system:
+This document explains the repo as it actually exists today: service boundaries, runtime flow, state model, auth, tool orchestration, and the current tradeoffs that matter if you are extending or operating it.
 
-- `web`: Next.js App Router app that hosts the UI, Gemini agent loop, SSE chat API, and browser-facing Kroger OAuth routes
-- `youtube-mcp`: Python MCP service for YouTube video search and best-effort transcript retrieval
-- `kroger-mcp`: Python MCP service for Kroger product search, customer auth state, and cart mutations
+## 1. System Overview
 
-The product model is:
+At a high level, the product promise is:
 
-1. The browser talks only to the `web` app.
-2. The `web` app runs the Gemini tool-calling loop.
-3. Gemini chooses between YouTube tools, Kroger tools, or both.
-4. The `web` app calls MCP tools on the backend services.
-5. The UI renders streamed text, tool activity, video context, and cart results.
+1. A user chats with one agent.
+2. The agent decides whether it needs YouTube, Kroger, both, or neither.
+3. The agent streams visible progress to the UI while it works.
+4. If the request is actionable and properly authorized, the agent can mutate a real Kroger cart.
 
-## Runtime Topology
+There are three runtime services:
+
+- `web`: Next.js App Router app and Gemini agent host
+- `youtube-mcp`: Python MCP server for video search and transcript retrieval
+- `kroger-mcp`: Python MCP server for Kroger search, OAuth session state, and cart writes
+
+The browser only talks to `web`. `web` is the only public application surface the user needs. The MCP services are backend-only dependencies.
+
+## 2. Repo Map
+
+These are the repo areas that matter most:
+
+- `app/`
+  - Next.js routes, layout, frontend page, browser auth routes
+- `components/`
+  - chat UI, markdown rendering, tool activity, video/cart cards
+- `lib/agent/`
+  - Gemini loop, intent detection, MCP client wiring, session memory, tool runtime
+- `lib/kroger/`
+  - Kroger-facing helpers used by the web host
+- `lib/llm/`
+  - structured ingredient extraction and schemas
+- `lib/recipes/`
+  - curated fallback recipes
+- `youtube-mcp/`
+  - standalone Python MCP server for YouTube
+- `kroger-mcp/`
+  - standalone Python MCP server for Kroger
+- `tests/`
+  - Vitest coverage for agent logic, matching, quantity estimation, carry-over, and wrappers
+
+Key entry files:
+
+- [app/page.tsx](app/page.tsx)
+- [app/api/chat/route.ts](app/api/chat/route.ts)
+- [lib/agent/runAgentTurn.ts](lib/agent/runAgentTurn.ts)
+- [lib/agent/toolRuntime.ts](lib/agent/toolRuntime.ts)
+- [lib/agent/gemini.ts](lib/agent/gemini.ts)
+- [lib/agent/mcpClient.ts](lib/agent/mcpClient.ts)
+- [youtube-mcp/app.py](youtube-mcp/app.py)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
+- [docker-compose.yml](docker-compose.yml)
+
+## 3. Runtime Topology
 
 ```mermaid
 flowchart LR
-    User["Browser UI"] --> Web["Next.js Web App"]
-    Web --> Gemini["Gemini API"]
-    Web --> YMCP["youtube-mcp"]
-    Web --> KMCP["kroger-mcp"]
-    YMCP --> YouTube["YouTube Data API + public transcript access"]
-    KMCP --> Kroger["Kroger APIs"]
+    U["User Browser"] --> W["web (Next.js + Gemini host)"]
+    W --> G["Gemini API"]
+    W --> YM["youtube-mcp"]
+    W --> KM["kroger-mcp"]
+    YM --> Y["YouTube Data API"]
+    YM --> T["Public caption / transcript access"]
+    KM --> K["Kroger APIs"]
 ```
 
-### Service Responsibilities
+Important boundaries:
 
-#### `web`
+- Gemini never calls the internet directly from the browser.
+- Gemini never touches Kroger tokens directly.
+- MCP services do not render UI.
+- The browser never sees Kroger access tokens, refresh tokens, or client secrets.
 
-Main files:
+## 4. Service Responsibilities
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\page.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\page.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\api\chat\route.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\api\chat\route.ts)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\agent\runAgentTurn.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\agent\runAgentTurn.ts)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\agent\toolRuntime.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\agent\toolRuntime.ts)
+### 4.1 `web`
 
-Responsibilities:
+Primary files:
 
-- render the chat UI
-- stream agent events to the browser over SSE
-- host the Gemini tool loop
-- maintain lightweight per-session agent state in memory
-- enforce cart mutation guards
-- expose browser-facing Kroger OAuth routes
+- [app/page.tsx](app/page.tsx)
+- [app/api/chat/route.ts](app/api/chat/route.ts)
+- [app/api/crave/route.ts](app/api/crave/route.ts)
+- [app/api/health/route.ts](app/api/health/route.ts)
+- [app/api/kroger/auth/start/route.ts](app/api/kroger/auth/start/route.ts)
+- [app/auth/kroger/page.tsx](app/auth/kroger/page.tsx)
+- [app/auth/kroger/callback/route.ts](app/auth/kroger/callback/route.ts)
 
-#### `youtube-mcp`
+The web app is responsible for:
 
-Main file:
+- rendering the chat experience
+- streaming agent output to the browser over SSE
+- holding the Gemini orchestration loop
+- deciding which MCP tools are exposed to Gemini
+- maintaining lightweight session memory for conversational carry-over
+- enforcing cart mutation policy
+- exposing the browser-facing OAuth start and callback flow for Kroger
+- adapting the old one-shot `POST /api/crave` contract onto the new agent runtime
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\youtube-mcp\app.py](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\youtube-mcp\app.py)
+The web app is not responsible for:
 
-Responsibilities:
+- direct YouTube API calls
+- direct Kroger product or cart API calls in the active path
+- durable multi-instance session persistence
 
-- normalize search queries for recipe/video lookups
-- search YouTube for likely recipe videos
-- probe up to five strong candidates for transcript availability
-- prefer transcript-backed videos when available
-- return video metadata and transcript context
+### 4.2 `youtube-mcp`
 
-#### `kroger-mcp`
+Primary file:
 
-Main file:
+- [youtube-mcp/app.py](youtube-mcp/app.py)
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\kroger-mcp\app.py](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\kroger-mcp\app.py)
+This service handles:
 
-Responsibilities:
+- YouTube search normalization
+- video candidate scoring
+- transcript probing
+- transcript retrieval
+- metadata packaging into MCP tool responses
 
-- hold Kroger client credentials and user OAuth tokens server-side
-- search Kroger products for a fixed configured location
-- add items to the user cart
-- store per-session Kroger auth state on disk
-- expose MCP cart/search tools plus small HTTP auth endpoints
+Important design choice:
 
-## Chat And Agent Flow
+- CraveCart does not transcribe audio itself
+- it only uses public transcript access when available
+- if none of the first five likely candidates expose a transcript, the system falls back to the most relevant candidate and later infers from title + description
 
-### 1. Browser Request
+### 4.3 `kroger-mcp`
 
-The browser posts chat history to:
+Primary file:
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\api\chat\route.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\api\chat\route.ts)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
 
-This route:
+This service handles:
 
-- ensures a `cravecart_session` cookie exists
-- starts an SSE response
-- invokes `runAgentTurn(...)`
+- Kroger OAuth authorization-code exchange
+- Kroger client-credentials token management for product search
+- per-session user token storage
+- product search for a fixed configured store
+- batched add-to-cart requests implemented internally as item-by-item writes
+- last cart summary persistence
+- mock mode for local/demo continuity
 
-### 2. Agent Loop
+It exposes both:
 
-The core loop lives in:
+- MCP tools for the agent host
+- small HTTP endpoints used by the browser-facing auth flow
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\agent\runAgentTurn.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\agent\runAgentTurn.ts)
+## 5. Frontend Architecture
 
-The loop:
+Primary UI files:
 
-1. builds a system prompt from the latest user message
-2. restores carry-over state when follow-up turns refer to prior recipe or cart context
-3. sends chat history and tool declarations to Gemini
-4. executes returned tool calls via `AgentToolRuntime`
-5. streams `tool_call_started`, `tool_call_finished`, and `assistant_text_delta`
-6. emits `cart_ready`, `needs_kroger_auth`, or `error` terminal events when appropriate
+- [app/page.tsx](app/page.tsx)
+- [components/ChatInput.tsx](components/ChatInput.tsx)
+- [components/ChatMarkdown.tsx](components/ChatMarkdown.tsx)
+- [components/AgentActivityPanel.tsx](components/AgentActivityPanel.tsx)
+- [components/VideoResultCard.tsx](components/VideoResultCard.tsx)
+- [components/CartReadyCard.tsx](components/CartReadyCard.tsx)
+- [components/CartItemsList.tsx](components/CartItemsList.tsx)
+- [components/KrogerAuthClient.tsx](components/KrogerAuthClient.tsx)
 
-### 3. Tool Runtime
+The frontend is a client-side transcript renderer, not a server component workflow. The main page stores chat turns in local React state as `UiMessage` objects that hold:
 
-The tool execution layer lives in:
+- role
+- content
+- streaming/error status
+- tool traces
+- optional video artifact
+- optional cart artifact
+- optional Kroger auth CTA
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\agent\toolRuntime.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\agent\toolRuntime.ts)
+Important UI behaviors:
 
-It provides Gemini with a stable tool surface:
+- the input stays docked at the bottom
+- chat history grows upward like a normal assistant UI
+- example prompts disappear after the first turn
+- Markdown is rendered via `react-markdown` + `remark-gfm`
+- tool activity is shown inline per assistant turn
+- cart/video cards are turn-scoped artifacts, not global sticky panels
+
+The frontend does not parse Gemini directly. It only consumes the server’s SSE event protocol.
+
+## 6. Public HTTP Surface
+
+### 6.1 `POST /api/chat`
+
+File:
+
+- [app/api/chat/route.ts](app/api/chat/route.ts)
+
+Purpose:
+
+- main agent endpoint used by the chat UI
+
+Input:
+
+- validated by [lib/agent/schemas.ts](lib/agent/schemas.ts)
+- shape: `{ messages: ChatMessage[] }`
+
+Behavior:
+
+1. parse the payload
+2. ensure a session cookie exists
+3. create an SSE stream
+4. call `runAgentTurn(...)`
+5. stream agent events until completion
+
+Events emitted:
+
+- `assistant_text_delta`
+- `tool_call_started`
+- `tool_call_finished`
+- `needs_kroger_auth`
+- `cart_ready`
+- `error`
+
+### 6.2 `POST /api/crave`
+
+Files:
+
+- [app/api/crave/route.ts](app/api/crave/route.ts)
+- [lib/api/handleCraveRequest.ts](lib/api/handleCraveRequest.ts)
+
+Purpose:
+
+- preserve the older hackathon “one-shot craving” API contract
+
+This route is no longer a separate pipeline. It converts the craving into an agent instruction and runs the same Gemini + MCP path as chat.
+
+### 6.3 `GET /api/health`
+
+File:
+
+- [app/api/health/route.ts](app/api/health/route.ts)
+
+Purpose:
+
+- expose environment and service health for local validation
+
+It checks:
+
+- Gemini key present
+- YouTube key present
+- YouTube MCP `/health`
+- Kroger MCP `/health`
+- whether Kroger is in mock mode
+
+## 7. Session Model
+
+CraveCart has two distinct kinds of state:
+
+1. conversational carry-over state in the web app
+2. Kroger auth/cart state in the Kroger service
+
+### 7.1 Browser Cookie
+
+File:
+
+- [lib/kroger/session.ts](lib/kroger/session.ts)
+
+The web app ensures an opaque `cravecart_session` cookie exists. That cookie is the shared session key across services.
+
+The cookie is used for:
+
+- lookup of in-memory agent session state in `web`
+- lookup of JSON-backed Kroger OAuth state in `kroger-mcp`
+
+### 7.2 Web Agent Memory
+
+File:
+
+- [lib/agent/sessionState.ts](lib/agent/sessionState.ts)
+
+The web host keeps session state in a process-local `Map` on `globalThis`.
+
+Stored fields include:
+
+- latest artifact
+- latest cart
+- latest dish
+- latest recipe source
+- latest recipe text
+- latest extracted recipe
+- pending Kroger selections
+- unmatched ingredients
+- timestamp
+
+TTL:
+
+- 6 hours
+
+Implication:
+
+- this is fine for one-instance operation
+- it is not a multi-instance or horizontally scaled design
+- a process restart drops conversation memory
+
+### 7.3 Kroger Session Storage
+
+File:
+
+- [kroger-mcp/app.py](kroger-mcp/app.py)
+
+The Kroger service stores one JSON file per session under its `data/sessions` directory. That state contains:
+
+- OAuth state token
+- user access token
+- user refresh token
+- token expiry
+- last cart summary
+- connect timestamp
+
+Implication:
+
+- real cart auth survives restarts if the volume persists
+- this is still an MVP persistence layer, not a shared production auth store
+
+## 8. Agent Runtime
+
+The heart of the system is the Gemini loop in:
+
+- [lib/agent/runAgentTurn.ts](lib/agent/runAgentTurn.ts)
+
+### 8.1 High-Level Algorithm
+
+For each user turn:
+
+1. load session state
+2. instantiate `AgentToolRuntime`
+3. convert chat messages into Gemini contents
+4. build a system prompt with domain routing hints
+5. optionally inject carry-over server context
+6. run a tool-calling loop
+7. stream tool progress and text deltas
+8. persist updated session state
+
+### 8.2 Loop Structure
+
+The loop has a hard cap:
+
+- `MAX_TOOL_LOOPS = 48`
+
+That is intentionally high enough for multi-step shopping flows, but still bounded so a bad model/tool interaction cannot spin forever.
+
+On each iteration:
+
+1. call Gemini with the current conversation state
+2. inspect whether Gemini returned tool calls
+3. if tool calls exist:
+   - emit `tool_call_started`
+   - execute each tool through `AgentToolRuntime`
+   - emit `tool_call_finished`
+   - append function results back into the model conversation
+4. if no tool calls exist:
+   - optionally auto-finalize the cart if pending selections exist
+   - optionally force a follow-up response if the user asked for instructions plus shopping
+   - otherwise stream the final text reply
+
+### 8.3 Why the Runtime Owns Orchestration
+
+Gemini chooses tools, but the runtime enforces behavior the model is not trusted to enforce alone:
+
+- cart mutation permission
+- carry-over injection
+- cart auto-finalization
+- recipe wrap-up generation after shopping
+- auth interruption handling
+- session persistence
+
+This keeps the product agentic without making it brittle.
+
+## 9. Prompting Strategy
+
+Primary prompt file:
+
+- [lib/agent/gemini.ts](lib/agent/gemini.ts)
+
+The system prompt tells Gemini:
+
+- it is a focused food-video and grocery agent
+- it may answer ordinary questions directly with no tools
+- video-first turns must not answer from search results alone
+- recipe shopping should usually follow:
+  - search videos
+  - get video context
+  - use fallback only when needed
+  - extract ingredients
+  - search Kroger
+  - add to cart once
+- transcript-backed videos are preferred
+- if no transcript exists, title + description can still be used
+- explicit buy intent is required before cart mutation
+
+There is a second Gemini use:
+
+- `generateRecipeWrapUp(...)`
+
+That helper converts messy final shopping context into a user-facing “how to make it” response plus a short cart outcome paragraph.
+
+## 10. Intent And Safety Layer
+
+Primary file:
+
+- [lib/agent/intent.ts](lib/agent/intent.ts)
+
+This module is critical because it adds server-side policy independent of the model’s own judgment.
+
+It detects:
+
+- explicit buy intent
+- video-first requests
+- Kroger/cart requests
+- carry-over shopping follow-ups
+- cart status follow-ups
+- video context follow-ups
+- unsupported cart operations
+
+Examples:
+
+- `buy milk` => cart mutation allowed
+- `find a good chicken alfredo video and buy the groceries` => hybrid path
+- `tell me about this burger video` => no cart mutation allowed
+- `delete everything in my cart` => blocked with an explanatory text response
+
+Current unsupported cart operations:
+
+- clear cart
+- remove item
+- update quantity on existing line item
+
+Those are deliberately intercepted before the tool loop so the app fails clearly.
+
+## 11. MCP Client Layer
+
+Primary file:
+
+- [lib/agent/mcpClient.ts](lib/agent/mcpClient.ts)
+
+The web app is an MCP client for both backend services.
+
+Implementation details:
+
+- uses `@modelcontextprotocol/sdk`
+- uses `StreamableHTTPClientTransport`
+- opens one client connection per service per turn
+- parses either:
+  - `structuredContent`
+  - JSON text responses
+  - fallback raw tool result fields
+- explicitly closes and attempts to terminate the session after the turn
+
+This design keeps MCP literal in the runtime. Gemini is not simulating tools; it is driving actual MCP endpoints.
+
+## 12. Tool Runtime Contract
+
+Primary file:
+
+- [lib/agent/toolRuntime.ts](lib/agent/toolRuntime.ts)
+
+`AgentToolRuntime` is the main execution adapter between Gemini’s tool-call worldview and the real backend services.
+
+It exposes these tools to Gemini:
 
 - `search_youtube_videos`
 - `get_video_context`
@@ -122,143 +472,460 @@ It provides Gemini with a stable tool surface:
 - `add_kroger_items_to_cart`
 - `get_kroger_cart_summary`
 
-This layer also owns:
+Important runtime responsibilities:
 
-- session-scoped saved recipe/cart/video context
-- product ranking
+- translate MCP responses into model-friendly summaries
+- maintain per-turn and per-session artifacts
+- store partially matched cart selections
+- merge shopping results across turns
+- decide when auto-finalization is safe
+- generate follow-up prompts that force completion when the model stops early
+
+### 12.1 Why `AgentToolRuntime` Matters
+
+Without this layer, the model would need to reason about:
+
 - quantity estimation
-- cart auto-finalization when the model finishes matching ingredients
+- carry-over matching state
+- Kroger ranking logic
+- batching semantics
+- auth interruption details
 
-## Transcript Strategy
+That would make the system less reliable. The runtime centralizes deterministic logic and lets Gemini stay high-level.
 
-CraveCart does not transcribe audio itself.
+## 13. YouTube Flow
 
-Current strategy:
+Primary file:
 
-1. Search YouTube for relevant English recipe videos.
-2. Probe up to five likely candidates for accessible captions.
-3. If any have transcripts, prefer those videos.
-4. If none do, use the most relevant result anyway.
-5. When no transcript exists, infer recipe context from the video title and description.
+- [youtube-mcp/app.py](youtube-mcp/app.py)
 
-That logic lives mainly in:
+### 13.1 Search Strategy
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\youtube-mcp\app.py](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\youtube-mcp\app.py)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\llm\extractIngredients.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\llm\extractIngredients.ts)
+The YouTube MCP service does more than raw search:
 
-## Shopping Flow
+1. normalize the query
+2. request a wider candidate pool from YouTube
+3. enrich with `videos` metadata
+4. score each candidate
+5. probe up to five likely candidates for transcript availability
+6. prefer transcript-backed candidates
+7. otherwise keep the best relevant candidate
 
-For recipe shopping turns:
+Signals used in scoring:
 
-1. Gemini selects a video.
-2. `get_video_context` loads transcript or description-based context.
-3. `extract_recipe_ingredients` converts recipe context into structured grocery data.
-4. `search_kroger_products` matches each non-pantry ingredient.
-5. `add_kroger_items_to_cart` performs a single batched cart mutation when the user explicitly wants to buy.
+- direct dish relevance
+- cooking/recipe keywords
+- anti-Shorts bias
+- anti-roundup bias for single-dish shopping requests
+- language penalties for clearly non-English candidates
+- rough duration preference
 
-Relevant files:
+### 13.2 Transcript Strategy
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\kroger\productMatcher.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\kroger\productMatcher.ts)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\kroger\quantityEstimator.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\kroger\quantityEstimator.ts)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\kroger\searchQueries.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\kroger\searchQueries.ts)
+CraveCart does not generate transcripts itself.
 
-## Session And Auth Model
+It relies on:
 
-### Browser Session
+- `youtube-transcript-api`
+- public subtitle access for manual or auto-generated English captions
 
-The web app uses an opaque cookie:
+If transcript retrieval works:
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\kroger\session.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\kroger\session.ts)
+- the transcript is cleaned and returned
 
-That cookie keys:
+If it fails:
 
-- in-memory agent context in the web app
-- persisted Kroger auth state in the Kroger MCP service
+- the selected video is still returned
+- the downstream system may use title + description inference
+- or the curated fallback recipe path if one exists and the context suggests it
 
-### Kroger OAuth
+### 13.3 Video Context Contract
 
-Browser-facing routes:
+`get_video_context` returns:
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\auth\kroger\page.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\auth\kroger\page.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\auth\kroger\callback\route.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\auth\kroger\callback\route.ts)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\api\kroger\auth\start\route.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\api\kroger\auth\start\route.ts)
+- video metadata
+- transcript availability
+- transcript text when available
+- transcript message when unavailable
 
-Kroger tokens never go to the browser. They stay inside `kroger-mcp`.
+The web runtime then decides how to transform that into recipe context.
 
-## Safety And Control Boundaries
+## 14. Fallback Recipe Strategy
 
-### Cart Mutation Guard
+Primary file:
 
-CraveCart does not let Gemini mutate the cart on vague intent alone.
+- [lib/recipes/fallbackRecipes.ts](lib/recipes/fallbackRecipes.ts)
 
-The explicit buy-intent guard lives in:
+Fallbacks are intentionally narrow and curated. They exist as a reliability backstop, not as the primary source of truth.
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\lib\agent\intent.ts](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\lib\agent\intent.ts)
+Current seeded dishes:
+
+- American cheeseburger
+- Chicken Alfredo
+- Chocolate chip cookies
+- Caesar salad
+- Hungarian Pizza
+
+Each fallback includes:
+
+- human-readable recipe text
+- a pre-structured `ExtractedRecipe`
+
+This matters because the app can continue even when:
+
+- the transcript is unavailable
+- Gemini extraction fails twice
+- a known demo dish needs guaranteed continuity
+
+## 15. Ingredient Extraction
+
+Primary files:
+
+- [lib/llm/extractIngredients.ts](lib/llm/extractIngredients.ts)
+- [lib/llm/client.ts](lib/llm/client.ts)
+- [lib/llm/schemas.ts](lib/llm/schemas.ts)
+
+The extraction path is separate from the main agent loop. Gemini uses native tool-calling for orchestration, but ingredient extraction uses a constrained JSON sub-call with schema validation.
+
+Flow:
+
+1. build a strict recipe extraction prompt
+2. call Gemini with `responseMimeType: "application/json"`
+3. parse against Zod schema
+4. if parsing fails, retry once with a repair prompt
+5. if it still fails and a structured fallback exists, use the fallback
+6. otherwise throw
+
+The extractor is told to:
+
+- normalize ingredients to grocery-searchable names
+- ignore cookware
+- treat pantry basics as pantry items
+- preserve quantities and units where possible
+- infer from title/description if no transcript exists
+- focus on one coherent recipe when a video contains multiple variants
+
+## 16. Product Search And Matching
+
+Primary files:
+
+- [lib/kroger/searchQueries.ts](lib/kroger/searchQueries.ts)
+- [lib/kroger/productMatcher.ts](lib/kroger/productMatcher.ts)
+- [lib/kroger/quantityEstimator.ts](lib/kroger/quantityEstimator.ts)
+
+This is one of the most important “deterministic over LLM” parts of the repo.
+
+### 16.1 Query Expansion
+
+The runtime does not blindly search Kroger with the raw ingredient string. It generates normalized candidate queries that better match real retail catalogs.
+
+Examples of the job this layer does:
+
+- collapse awkward LLM phrasing
+- handle produce variants
+- handle “or” ingredient forms
+- map normalized ingredient names to grocery-friendly search terms
+
+### 16.2 Product Ranking
+
+The product matcher scores candidate Kroger products against the structured ingredient using signals like:
+
+- name relevance
+- category fit
+- package usefulness
+- generic/private-label acceptability
+- lower price as a tie-breaker
+
+There is a minimum confidence threshold:
+
+- weak matches are discarded instead of forced
+
+That is why the app can return partial carts rather than hallucinated success.
+
+### 16.3 Quantity Estimation
+
+The quantity estimator converts recipe quantity into retail package count.
 
 Examples:
 
-- `buy milk` can mutate the cart
-- `tell me about this burger video` cannot mutate the cart
+- `2 lb chicken breast` may map to 2 smaller packages or 1 larger package
+- `12 oz pasta` often maps cleanly to 1 standard pasta box
+- ambiguous size metadata falls back to `1`
 
-### Unsupported Cart Operations
+This layer is heuristic and intentionally conservative.
 
-Kroger’s public cart support in this app is add-focused. Removing items, clearing the cart, and changing line-item quantities are not implemented against live Kroger cart APIs in this repo.
+## 17. Kroger Flow
 
-## Frontend Rendering Model
+Primary files:
 
-The UI keeps a local chat transcript in the browser and renders each assistant turn with its own scoped artifacts:
+- [lib/kroger/KrogerClient.ts](lib/kroger/KrogerClient.ts)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
 
-- chat markdown
-- tool activity
-- video card
-- cart card
-- auth CTA
+### 17.1 Search
 
-Main files:
+Product search uses Kroger client credentials, not the user’s OAuth token.
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\app\page.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\app\page.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\components\ChatMarkdown.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\components\ChatMarkdown.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\components\AgentActivityPanel.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\components\AgentActivityPanel.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\components\VideoResultCard.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\components\VideoResultCard.tsx)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\components\CartReadyCard.tsx](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\components\CartReadyCard.tsx)
+That lets the app:
 
-## Deployment Shape
+- search products before the user connects Kroger
+- build a draft shopping plan
+- stop at auth only when cart mutation is needed
 
-Local and simple hosted deployments use:
+### 17.2 Cart Writes
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\docker-compose.yml](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\docker-compose.yml)
+Cart writes require:
 
-Recommended baseline:
+- explicit buy intent in the latest user turn
+- a connected Kroger session unless mock mode is on
 
-- one `web` instance
-- one `youtube-mcp` instance
-- one `kroger-mcp` instance
-- a persistent volume for Kroger auth state
+The add-to-cart tool accepts a batch, but `kroger-mcp` writes each item one by one with `PUT /cart/add`. This lets the app:
 
-This is still a lightweight architecture intended for MVP and small-scale use.
+- return per-item success/failure
+- keep partial progress
+- persist a last cart summary
 
-## Testing
+### 17.3 Last Cart Summary
 
-Important verification paths are covered by:
+The Kroger service stores a session-level last cart summary. The web app can query it through `get_kroger_cart_summary` if needed.
 
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\tests](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\tests)
-- [C:\Users\mousa\Desktop\HACKATHON 2026 APRIL\cravecart\kroger-mcp\test_smoke.py](C:\Users\mousa\Desktop\HACKATHON%202026%20APRIL\cravecart\kroger-mcp\test_smoke.py)
+## 18. Kroger OAuth Model
 
-Core checks:
+Files:
 
-- intent routing
-- carry-over behavior
-- ingredient extraction repair flow
-- product ranking guards
+- [app/api/kroger/auth/start/route.ts](app/api/kroger/auth/start/route.ts)
+- [app/auth/kroger/page.tsx](app/auth/kroger/page.tsx)
+- [app/auth/kroger/callback/route.ts](app/auth/kroger/callback/route.ts)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
+
+Flow:
+
+1. browser asks `web` to start auth
+2. `web` ensures the session cookie exists
+3. `web` calls `kroger-mcp /auth/start`
+4. `kroger-mcp` generates and stores an OAuth `state`
+5. browser is redirected to Kroger
+6. Kroger redirects back to `/auth/kroger/callback`
+7. `web` forwards `code` and `state` to `kroger-mcp /auth/callback`
+8. `kroger-mcp` exchanges the code for tokens and stores them under the session
+
+Important properties:
+
+- tokens never go to the browser
+- browser and backend state are stitched together by `cravecart_session`
+- redirect URI must match the Kroger app configuration exactly
+
+## 19. Mock Mode
+
+Primary files:
+
+- [lib/env.ts](lib/env.ts)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
+
+Mock mode turns on when:
+
+- `KROGER_MOCK_MODE=true`
+- or Kroger credentials are missing
+
+Mock mode behavior:
+
+- auth status always returns authenticated
+- product search resolves against a local mock catalog
+- add-to-cart succeeds synthetically
+- the MCP surface stays the same as live mode
+
+This is important because it means:
+
+- the agent path is consistent
+- local demos do not require live auth
+- the web app does not fork its core logic for mock vs real
+
+## 20. Compatibility Wrapper
+
+Primary file:
+
+- [lib/api/handleCraveRequest.ts](lib/api/handleCraveRequest.ts)
+
+The old MVP shape still exists for `POST /api/crave`, but it is now just a translator:
+
+- normalizes the craving
+- builds an explicit agent instruction
+- runs the same `runAgentTurn(...)`
+- maps the final cart artifact back to the old JSON contract
+
+This preserves the original demo API without maintaining two execution engines.
+
+## 21. Event Streaming Model
+
+The server emits low-level incremental events, but the UI turns them into cohesive turn artifacts.
+
+Streaming event types are defined in:
+
+- [lib/types.ts](lib/types.ts)
+
+The frontend:
+
+- appends `assistant_text_delta` into the active assistant bubble
+- appends tool traces to the activity panel
+- derives video artifacts from `get_video_context`
+- stores cart artifacts only for the turn that produced them
+
+This is why a later message like `1+1?` does not keep showing an old cart card.
+
+## 22. Carry-Over Behavior
+
+One of the more subtle parts of the repo is the way follow-up turns reuse context.
+
+Examples of supported follow-ups:
+
+- `buy them for me`
+- `did you buy all the ingredients`
+- `how did he make it`
+- `what ingredients were in it`
+
+The web agent handles these by injecting server-generated carry-over prompts into Gemini when appropriate, rather than hoping the browser chat transcript alone is enough.
+
+This matters because:
+
+- tool results are richer than what the assistant text alone says
+- the saved recipe/cart/video context is normalized
+- follow-up turns can skip redundant tool calls
+
+## 23. Deployment Shape
+
+Primary files:
+
+- [docker-compose.yml](docker-compose.yml)
+- [Dockerfile](Dockerfile)
+- [youtube-mcp/Dockerfile](youtube-mcp/Dockerfile)
+- [kroger-mcp/Dockerfile](kroger-mcp/Dockerfile)
+
+Recommended baseline deployment:
+
+- one `web`
+- one `youtube-mcp`
+- one `kroger-mcp`
+- one persistent volume for Kroger session data
+
+This repo is well-suited to:
+
+- local development
+- demo environments
+- a single-instance hosted beta
+
+It is not yet well-suited to:
+
+- stateless multi-instance web scaling
+- stateless multi-instance Kroger service scaling
+- public multi-tenant auth persistence without additional infra
+
+## 24. Environment Contract
+
+Primary file:
+
+- [lib/env.ts](lib/env.ts)
+
+Important envs:
+
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `YOUTUBE_API_KEY`
+- `KROGER_CLIENT_ID`
+- `KROGER_CLIENT_SECRET`
+- `KROGER_REDIRECT_URI`
+- `KROGER_LOCATION_ID`
+- `KROGER_MOCK_MODE`
+- `APP_BASE_URL`
+
+Optional service overrides:
+
+- `YOUTUBE_MCP_URL`
+- `YOUTUBE_SERVICE_URL`
+- `KROGER_MCP_URL`
+- `KROGER_SIDECAR_URL`
+
+Defaults assume Docker Compose internal networking.
+
+## 25. Testing Strategy
+
+Test entry points:
+
+- [tests](tests)
+- [kroger-mcp/test_smoke.py](kroger-mcp/test_smoke.py)
+
+The current suite focuses on the places where agentic systems usually break:
+
+- intent gating
+- carry-over reuse
+- wrapper mapping
+- schema validation and repair
+- deterministic product ranking
 - quantity estimation
-- activity rendering
-- `/api/crave` compatibility mapping
-- Kroger MCP smoke behavior
+- UI activity trace normalization
+- mock/cart behavior
 
-## Known Tradeoffs
+This is an important pattern in the repo:
 
-- transcript coverage is best-effort and depends on accessible public captions
-- when transcripts are missing, recipe extraction falls back to video metadata inference
-- chat history is client-side only; there is no user account system in the web app
-- agent session context in the web app is in-memory, so it is not a horizontally scaled multi-instance design yet
-- Kroger auth state in `kroger-mcp` is file-backed, not database-backed
+- Gemini handles choice and synthesis
+- deterministic code handles validation, state, ranking, and policy
+- tests focus on the deterministic layer
+
+## 26. Current Tradeoffs
+
+This repo is deliberately pragmatic. The main compromises are:
+
+- transcript retrieval is best-effort
+- title/description inference can be imperfect when transcripts are missing
+- session memory in the web app is in-memory only
+- Kroger session storage is file-backed
+- cart mutation support is add-only in the live path
+- quantity estimation is heuristic
+- there is no user account system inside CraveCart itself
+
+Those are acceptable for the current product stage because the architecture is optimizing for:
+
+- visible agentic behavior
+- real tool boundaries
+- live cart usefulness
+- simple deployment
+
+## 27. Extension Points
+
+If you want to extend the system, these are the cleanest seams:
+
+### Add more fallback recipes
+
+- [lib/recipes/fallbackRecipes.ts](lib/recipes/fallbackRecipes.ts)
+
+### Add more tool-level intelligence
+
+- [lib/agent/toolRuntime.ts](lib/agent/toolRuntime.ts)
+- [lib/agent/intent.ts](lib/agent/intent.ts)
+
+### Improve product matching
+
+- [lib/kroger/productMatcher.ts](lib/kroger/productMatcher.ts)
+- [lib/kroger/searchQueries.ts](lib/kroger/searchQueries.ts)
+- [lib/kroger/quantityEstimator.ts](lib/kroger/quantityEstimator.ts)
+
+### Add new MCP domains
+
+- [lib/agent/mcpClient.ts](lib/agent/mcpClient.ts)
+- [lib/agent/gemini.ts](lib/agent/gemini.ts)
+
+### Replace MVP persistence
+
+- [lib/agent/sessionState.ts](lib/agent/sessionState.ts)
+- [kroger-mcp/app.py](kroger-mcp/app.py)
+
+## 28. Mental Model For Contributors
+
+If you are new to the repo, the correct mental model is:
+
+- `page.tsx` is the chat shell
+- `/api/chat` is the streamed execution gateway
+- `runAgentTurn.ts` is the agent brainstem
+- `toolRuntime.ts` is the deterministic orchestration core
+- `youtube-mcp` is the video/transcript provider
+- `kroger-mcp` is the store/cart provider
+
+Gemini decides what to do next. The runtime decides what Gemini is allowed to do, how tool results are persisted, and how the product keeps working when the world is messy.
