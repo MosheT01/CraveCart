@@ -40,3 +40,7 @@ pnpm-debug.log*
 # OS noise
 .DS_Store
 Thumbs.db
+.idea/
+.claude/
+.env
+node_modules/
