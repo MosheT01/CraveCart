@@ -2,6 +2,8 @@
 # CI helper (Linux/GitHub Actions): sync Fly secrets from Secret Manager and deploy.
 # Requires: gcloud authenticated, flyctl authenticated (FLY_API_TOKEN), NETWORK.
 set -euo pipefail
+set +o xtrace
+# Do not enable bash xtrace in CI (e.g. ACTIONS_STEP_DEBUG); it would print secret-bearing lines.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -25,13 +27,27 @@ REDIRECT_URI="${WEB_URL}/auth/kroger/callback"
 
 echo "GCP project=$GCP_PROJECT Fly app=$FLY_APP Kroger redirect=$REDIRECT_URI"
 
+# Register values with GitHub Actions so any later accidental echo is redacted in the web log.
+gh_mask() {
+  [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+  local val="$1"
+  [[ -n "$val" ]] || return 0
+  if [[ "$val" == *$'\n'* ]]; then
+    echo "warning: skipping ::add-mask:: for a multiline value (secret name redacted)" >&2
+    return 0
+  fi
+  if [[ "$val" == *'::'* ]]; then
+    echo "warning: value contains '::' — ::add-mask:: may be unreliable; avoid logging this job verbosely" >&2
+  fi
+  echo "::add-mask::${val}"
+}
+
 read_sm_required() {
   local name="$1" out
-  out="$(gcloud secrets versions access latest --secret="$name" --project="$GCP_PROJECT")" ||
-    {
-      echo "Could not read required Secret Manager secret $name (check IAM roles/secretmanager.secretAccessor for this CI identity)." >&2
-      return 1
-    }
+  if ! out="$(gcloud secrets versions access latest --secret="$name" --project="$GCP_PROJECT" 2>/dev/null)"; then
+    echo "Could not read required Secret Manager secret $name (check IAM roles/secretmanager.secretAccessor for this CI identity)." >&2
+    return 1
+  fi
   printf '%s' "$out"
 }
 
@@ -81,6 +97,11 @@ if ! command -v flyctl >/dev/null 2>&1; then
   echo "flyctl not on PATH"
   exit 1
 fi
+
+gh_mask "$KROGER_CLIENT_ID"
+gh_mask "$KROGER_CLIENT_SECRET"
+gh_mask "$INTERNAL_SIDECAR_SECRET"
+gh_mask "$KROGER_LOCATION_ID"
 
 # Do not call `flyctl apps list` / `apps create` here: a deploy-scoped token
 # (`fly tokens create deploy -a MYAPP`) returns 401 for those APIs and yields a false "missing app".
