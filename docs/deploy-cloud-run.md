@@ -2,13 +2,23 @@
 
 This document matches the three-service layout from [docker-compose.yml](../docker-compose.yml): **Next.js web**, **youtube-mcp**, and **kroger-mcp**. The automated path is [cloudbuild.yaml](../cloudbuild.yaml) (build, push, deploy, sync OAuth redirect URLs).
 
+## Sidecar network security (not public)
+
+Only **`cravecart-web`** stays **public** (unauthenticated ingress for the UI). **YouTube MCP** and **Kroger MCP** must not be anonymously callable from the internet:
+
+- **Cloud Run MCPs** (`cravecart-youtube-mcp`, and `cravecart-kroger-mcp` if used): **no** `--allow-unauthenticated`; only identities with **`roles/run.invoker`** reach the service. **`cravecart-web`** uses Google **ID tokens** (see [`lib/server/sidecarGatewayFetch.ts`](../lib/server/sidecarGatewayFetch.ts)).
+- **Fly Kroger MCP**: not on GCP IAM. The app requires **`Authorization: Bearer <INTERNAL_SIDECAR_SECRET>`**, and Fly must have the same secret as Secret Manager / **`.env`** for local docker (see [`kroger-mcp/internal_gate.py`](../kroger-mcp/internal_gate.py)).
+- **`INTERNAL_SIDECAR_SECRET`**: never shipped to the browser; only server-side `fetch` attaches it.
+
+`allowed_hosts=["*"]` **does not** make services public—it only disables strict `Host`-header rejects behind proxies (`*.run.app`, docker service names).
+
 ## Credentials: `.env` (local) vs Secret Manager (prod)
 
 | Scope | Kroger/Gemini/YouTube keys |
 | ----- | -------------------------- |
 | **Local / Docker Compose** | Repo-root `.env` (from [.env.example](../.env.example)); never committed with real prod secrets |
 | **Cloud Run (this pipeline)** | [Secret Manager](https://console.cloud.google.com/security/secret-manager) referenced in `cloudbuild.yaml` (`--set-secrets`) |
-| **Fly.io (hybrid Kroger MCP)** | Not deployed by Cloud Build. Use [`kroger-mcp/deploy-fly.ps1`](../kroger-mcp/deploy-fly.ps1) with **`-FromGcpSecretManager -GcpProject YOUR_PROJECT`** so Fly gets the **same** `KROGER_CLIENT_ID` / `KROGER_CLIENT_SECRET` as Cloud Run |
+| **Fly.io (hybrid Kroger MCP)** | Not deployed by Cloud Build. Use [`kroger-mcp/deploy-fly.ps1`](../kroger-mcp/deploy-fly.ps1) with **`-FromGcpSecretManager`** so Fly gets the same **`INTERNAL_SIDECAR_SECRET`**, `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET` as GCP |
 
 Do **not** use `-UseParentEnv` for production Fly deployments; it reads `.env`, which often holds dev-only Kroger apps and mismatches Kroger Developer redirect URIs.
 
@@ -47,12 +57,15 @@ Register **exactly** that redirect URI in the Kroger developer console.
 
 3. **Secrets** in Secret Manager (version `latest` is what Cloud Run references):
 
-   | Secret name             | Used by                         |
-   | ----------------------- | ------------------------------- |
-   | `GEMINI_API_KEY`        | web                             |
-   | `YOUTUBE_API_KEY`       | web + `cravecart-youtube-mcp`   |
-   | `KROGER_CLIENT_ID`      | web (+ `cravecart-kroger-mcp` if that service exists) |
-   | `KROGER_CLIENT_SECRET`  | web (+ `cravecart-kroger-mcp` if that service exists) |
+   | Secret name                 | Used by |
+   | --------------------------- | ------- |
+   | `GEMINI_API_KEY`            | web |
+   | `YOUTUBE_API_KEY`           | web + `cravecart-youtube-mcp` |
+   | `KROGER_CLIENT_ID`          | web (+ `cravecart-kroger-mcp` if that service exists) |
+   | `KROGER_CLIENT_SECRET`      | web (+ `cravecart-kroger-mcp` if that service exists) |
+   | `INTERNAL_SIDECAR_SECRET`   | **`cravecart-web`** (outbound auth) + **Fly Kroger MCP** (bearer gate). Create once, e.g. `openssl rand -base64 32 \| gcloud secrets create INTERNAL_SIDECAR_SECRET --data-file=-` |
+
+   Grant the Cloud Run **runtime** service account **`roles/secretmanager.secretAccessor`** on `INTERNAL_SIDECAR_SECRET`.
 
    Example:
 
@@ -69,27 +82,27 @@ Register **exactly** that redirect URI in the Kroger developer console.
 
 Align `_AR_HOSTNAME` with where you deploy Cloud Run (e.g. `us-central1` → `us-central1-docker.pkg.dev`). Bash deploy steps pin `us-central1`; change [`cloudbuild.yaml`](../cloudbuild.yaml) if you use another region.
 
-Set `_KROGER_LOCATION_ID` to your Kroger store location (required for product search). Ensure all four API secrets exist in Secret Manager.
+Set `_KROGER_LOCATION_ID` to your Kroger store location (required for product search). Ensure **API + `INTERNAL_SIDECAR_SECRET`** exist in Secret Manager (see table above).
 
-[`cloudbuild.yaml`](../cloudbuild.yaml) defaults **`_EXTERNAL_KROGER_SIDECAR_URL`** to **`https://cravecart-kroger-mcp.fly.dev`** so **`cravecart-web`** ships pointing at Fly for Kroger (no passing it every submit). Override that substitution if your Fly app hostname differs.
+Hybrid Kroger MCP on Fly requires **`_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev`** on each **`gcloud builds submit`** (no production hostname checked into the repo defaults).
 
 ```bash
 gcloud builds submit --config=cloudbuild.yaml \
-  --substitutions=_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=YOUR_LOCATION_ID
+  --substitutions=_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=YOUR_LOCATION_ID,_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev
 ```
 
 On **PowerShell**, wrap substitutions in **single quotes** so commas do not split the argument (otherwise `_AR_HOSTNAME` can silently absorb the rest of the flags and break the build):
 
 ```powershell
 gcloud builds submit --config=cloudbuild.yaml `
-  '--substitutions=_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=YOUR_LOCATION_ID'
+  '--substitutions=_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=YOUR_LOCATION_ID,_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev'
 ```
 
 After the first deploy, copy the printed redirect URI into the Kroger app settings.
 
 ### Hybrid Kroger on Fly (`_EXTERNAL_KROGER_SIDECAR_URL` substitution)
 
-**Default:** Fly base URL **`https://cravecart-kroger-mcp.fly.dev`** (no `/mcp/`) — see substitutions in [`cloudbuild.yaml`](../cloudbuild.yaml).
+Set Fly’s **HTTPS origin** (**`https://YOUR_APP.fly.dev`**, no `/mcp/`) via Cloud Build substitutions every deploy (substitution defaults to empty in-repo).
 
 Effects when non-empty:
 
@@ -192,17 +205,25 @@ Keep **Next.js + YouTube MCP** on Cloud Run as today. Deploy **`kroger-mcp` only
      KROGER_CLIENT_ID=YOUR_ID \
      KROGER_CLIENT_SECRET=YOUR_SECRET \
      KROGER_REDIRECT_URI=https://YOUR_WEB_SERVICE.run.app/auth/kroger/callback \
-     KROGER_LOCATION_ID=YOUR_LOCATION_ID
+     KROGER_LOCATION_ID=YOUR_LOCATION_ID \
+     INTERNAL_SIDECAR_SECRET=YOUR_INTERNAL_SECRET
    ```
 
-4. `fly deploy` from `kroger-mcp/`. Confirm `https://YOUR_APP.fly.dev/health` returns JSON with `"ok": true`.
+4. `fly deploy` from `kroger-mcp/`. Confirm Kroger MCP is up (**`/health` is not anonymous** anymore):
+
+   ```powershell
+   $t = "<paste INTERNAL_SIDECAR_SECRET value>"
+   curl.exe -sS -H "Authorization: Bearer $t" "https://YOUR_APP.fly.dev/health"
+   ```
+
+   Expect JSON with **`"ok": true`**.
 
    **Verify Fly matches Secret Manager:** the VM’s Kroger **`client_id`** must be the **same string** as in GCP Secret Manager (`KROGER_CLIENT_ID` used by `cravecart-web`). If Fly still has an old dev id from `.env`, Kroger OAuth can fail with `redirect_uri did not match` even when Kroger Developer is configured correctly.
 
    On **Windows / PowerShell**, use `--pty=false` so SSH does not complain about allocating a pseudo-TTY:
 
    ```bash
-   fly ssh console -a cravecart-kroger-mcp -q --pty=false -C "printenv KROGER_CLIENT_ID"
+   fly ssh console -a YOUR_FLY_APP -q --pty=false -C "printenv KROGER_CLIENT_ID"
    ```
 
    Replace `cravecart-kroger-mcp` with your `fly.toml` `app` name if different. PowerShell sometimes prints a benign PTY/`handle is invalid` line after stdout; rely on the printed `client_id` line above it.
@@ -220,15 +241,73 @@ Keep **Next.js + YouTube MCP** on Cloud Run as today. Deploy **`kroger-mcp` only
    - `KROGER_SIDECAR_URL` = `https://YOUR_APP.fly.dev` (no trailing path)
    - `KROGER_MCP_URL` = same origin; the web app normalizes `…/mcp/` internally (e.g. set `https://YOUR_APP.fly.dev`).
 
-6. Deploy **`cravecart-web`** so env points at Fly (manual step **5** if needed; Cloud Build **`_EXTERNAL_KROGER_SIDECAR_URL`** default is **`https://cravecart-kroger-mcp.fly.dev`** — see **Hybrid Kroger on Fly**). Delete **`cravecart-kroger-mcp`** on Cloud Run once if it still exists (**`gcloud run services delete`** in `us-central1`) to drop unused **`min-instances`** spend.
+6. Deploy **`cravecart-web`** with **`_EXTERNAL_KROGER_SIDECAR_URL`** (see **Hybrid Kroger on Fly**). Delete **`cravecart-kroger-mcp`** on Cloud Run once if unused (**`gcloud run services delete`** in `us-central1`).
 
    With **`KROGER_SIDECAR_URL`** / **`KROGER_MCP_URL`** pointing at Fly, **`deploy-fly.ps1 -FromGcpSecretManager`**, and Kroger Developer redirect URIs aligned, production Kroger OAuth and catalog calls should succeed end-to-end.
 
 **Notes:** Kroger redirects the **browser** to your **web** `/auth/kroger/callback`; the browser never needs to hit Fly for OAuth UI. Sessions and MCP tools must reach Fly (`X-CraveCart-Session` header), so keep Fly reachable from the internet. **`min_machines_running = 0`** scales the Fly machine down when idle (cheaper); the first Kroger MCP request after idle may cold-start.
 
+## Continuous deployment from `main` (GitHub Actions)
+
+The workflow [`.github/workflows/deploy-main.yml`](../.github/workflows/deploy-main.yml) runs when **`main`** is pushed (and can be **[Run workflow](https://docs.github.com/en/actions/using-workflows/manually-running-a-workflow)** manually). It submits **[`cloudbuild.yaml`](../cloudbuild.yaml)** from the repo checkout, then syncs Kroger MCP to Fly using **[`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh)** (`gcloud`/Secret Manager → `flyctl secrets set` → `flyctl deploy`). Order is intentional: **`cravecart-web`** must reach the **`sync-public-urls`** revision first so Kroger redirects come from **`gcloud run services describe cravecart-web`** before Fly publishes **`KROGER_REDIRECT_URI`**.
+
+### One-time repo configuration (GitHub)
+
+**Repository Variables** (**Settings → Secrets and variables → Actions → Variables**):
+
+| Variable | Example | Purpose |
+| -------- | ------- | ------- |
+| `GCP_PROJECT_ID` | `youtube-recipe-494816` | Project passed to **`gcloud builds submit`** |
+| `KROGER_LOCATION_ID` | `01400513` | Substitution for **`_KROGER_LOCATION_ID`** in Cloud Build (must match Kroger/store config) |
+| `EXTERNAL_KROGER_SIDECAR_URL` | `https://cravecart-kroger-mcp.fly.dev` | Substitution for **`_EXTERNAL_KROGER_SIDECAR_URL`** (Fly origin **without** `/mcp/`). |
+| `FLY_ORG` | _(omit)_ → `personal` | Only if **`flyctl apps create`** cannot default your org slug when bootstrapping a new Fly app. |
+| `KROGER_API_HOST` | _empty or_ `api-ce.kroger.com` | Optional; forwarded as **`_KROGER_API_HOST`** (_empty_ ⇒ production Kroger API) |
+| `GCP_USE_WIF` | `true` or omit | **`true`** uses Workload Identity below; omit or **`false`** uses a stored JSON service account |
+
+**Secrets** (**Actions → Secrets**):
+
+| Secret | When |
+| ------ | ----- |
+| `FLY_API_TOKEN` | Always. Create via **`fly tokens create`** scoped to deploy. |
+| `GCP_SA_KEY` | If **`GCP_USE_WIF`** is not **`true`** — JSON key for an SA that may **submit builds** (**`roles/cloudbuild.builds.editor`** or **`roles/run.admin`** + Artifact Registry **`writer`**, plus **`roles/iam.serviceAccountUser`** on the Cloud Build / runtime principals your project expects). If you use **`deploy-fly-ci.sh`**, the same principal must **`secretAccessor`** on **`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`** (optional **`KROGER_LOCATION_ID`**), matching local **`deploy-fly.ps1 -FromGcpSecretManager`** expectations. Mirrors what you already use locally for **`gcloud builds submit`**. |
+
+**Workload Identity Federation** (recommended over long-lived SA keys):
+
+| Secret | Value |
+| ------ | ----- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full provider resource (`projects/.../locations/global/workloadIdentityPools/...` / `providers/...`) |
+| `GCP_SERVICE_ACCOUNT` | **`name@YOUR_PROJECT_ID.iam.gserviceaccount.com`** to impersonate from GitHub |
+
+Set **`GCP_USE_WIF=true`** after following [Google’s “Configure Workload Identity Federation”](https://github.com/google-github-actions/auth/blob/main/README.md).
+
+### How this stays in sync with GCP Secret Manager
+
+| Surface | Mechanism |
+| ------- | --------- |
+| **Cloud Run (`cravecart-web`, MCPs)** | [`cloudbuild.yaml`](../cloudbuild.yaml) **`--set-secrets …=SECRET_NAME:latest`**. Containers receive env vars from mounted Secret Manager payloads (no plaintext values in YAML). Rotate by adding Secret Manager versions; redeploy pulls **`latest`** (usually what you want for CI/CD). |
+| **Fly Kroger MCP** | [`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) runs **`gcloud secrets versions access`** for **`KROGER_CLIENT_*`**, **`INTERNAL_SIDECAR_SECRET`**, optionally **`KROGER_LOCATION_ID`**, then **`fly secrets import`** on each **`main`** deploy so Fly stays aligned with GCP. **`INTERNAL_SIDECAR_SECRET`** must be the **same logical value** GCP uses for **`cravecart-web`** (`--set-secrets INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest`). |
+| **`KROGER_LOCATION_ID`** | Prefer the Cloud Build **`_KROGER_LOCATION_ID`** substitution (GitHub **`KROGER_LOCATION_ID`** repo variable → deploy env); the script falls back to **Secret Manager secret** `KROGER_LOCATION_ID` or the live **`cravecart-web`** env if present. |
+
+### Security notes (reasonable defaults)
+
+- **Trusted path only**: **`deploy-main`** triggers on **`push` to `main`** (maintainer merges), so untrusted forks do not automatically receive **`GCP_*` / `FLY_*`** secrets on PRs — see [GitHub Actions secret availability](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions#using-secrets-in-a-workflow). The lightweight [**`ci-deploy-infra-scripts.yml`**](../.github/workflows/ci-deploy-infra-scripts.yml) runs on PRs without credentials.
+- **Prefer Workload Identity Federation** (**`GCP_USE_WIF=true`**) instead of **`GCP_SA_KEY`**: OIDC exchanges short-lived GCP tokens (`id-token` permission enables this); long‑lived JSON keys increase blast radius if leaked.
+- **Grant least IAM to the CI identity**: e.g. **submit Cloud Build**, **Artifact Registry Writer**, **`serviceAccountUser`** as your project requires, plus **`secretmanager.secretAccessor`** only on the secrets the Fly sync script reads (**`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`**, optional **`KROGER_LOCATION_ID`**). Avoid **`roles/editor`** or **`roles/owner`** on the key or SA.
+- **Fly**: [`deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) publishes secrets via **stdin** to **`fly secrets import`** so values are less likely than **`fly secrets set`** to appear in **`ps`**/`argv`; still treat tokens as sensitive (masked **`FLY_API_TOKEN`** keeps logs clean).
+- **Action logs**: **`deploy-fly-ci.sh`** registers **`::add-mask::`** for OAuth / **`INTERNAL_SIDECAR_SECRET`** / location id strings after reading Secret Manager (substrings appearing later in that job log are redacted). The deploy workflow sets **`CLOUDSDK_VERBOSITY=error`**. Avoid **`ACTIONS_STEP_DEBUG`** on this workflow (bash **xtrace** can print sensitive lines).
+- **Remaining risk**: any CI that can read secrets and call deploy can pivot (standard for automated deploy pipelines). Rotate **`FLY_API_TOKEN`** periodically; revoke compromised SA keys/WIF attachments immediately.
+
+### Operational notes
+
+- Runs on **`ubuntu-latest`**: CI steps are POSIX **`bash`** (avoid PowerShell-only syntax in **`deploy-fly-ci.sh`**).
+- GitHub-hosted runners already handle **`--substitutions`** as single arguments; local **PowerShell** still needs quoting (see **[Deploy with Cloud Build](#deploy-with-cloud-build)** above).
+
 ## Related files
 
-- [cloudbuild.yaml](../cloudbuild.yaml)
+- [`.github/workflows/deploy-main.yml`](../.github/workflows/deploy-main.yml) — push-to-**`main`** deploy
+- [`.github/workflows/ci-deploy-infra-scripts.yml`](../.github/workflows/ci-deploy-infra-scripts.yml) — validates **`deploy-fly-ci.sh`** + workflow YAML without secrets
+- [`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) — Fly step used by Actions
+- [`cloudbuild.yaml`](../cloudbuild.yaml)
 - [Dockerfile](../Dockerfile) (Next.js `output: "standalone"`)
 - [.env.example](../.env.example)
 - [kroger-mcp/fly.toml](../kroger-mcp/fly.toml) — optional Fly.io deployment for Kroger MCP

@@ -17,11 +17,13 @@ permissions:
 # GCP Secret Manager ↔ Cloud Run: cloudbuild attaches secrets with --set-secrets (Gemini/Kroger/YouTube/internal).
 # Fly: deploy-fly-ci.sh reads SM at release time → fly secrets import (stdin); keep INTERNAL_SIDECAR_SECRET aligned with GCP.
 # Security: Prefer Workload Identity (GCP_USE_WIF=true); avoid GCP_SA_KEY if you can — see docs/deploy-cloud-run.md.
+# Do not enable ACTIONS_STEP_DEBUG on this workflow (bash xtrace can leak env). deploy-fly-ci.sh registers ::add-mask:: for SM values.
 
 jobs:
   deploy-gcp-then-fly:
     runs-on: ubuntu-latest
     env:
+      CLOUDSDK_VERBOSITY: error
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       # Cloud Build substitutions (single comma-separated string for gcloud builds submit).
       _SUBSTITUTIONS: _AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${{ vars.KROGER_LOCATION_ID }},_EXTERNAL_KROGER_SIDECAR_URL=${{ vars.EXTERNAL_KROGER_SIDECAR_URL }},_KROGER_API_HOST=${{ vars.KROGER_API_HOST }}
