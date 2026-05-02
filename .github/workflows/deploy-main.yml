@@ -57,13 +57,15 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Verify Firebase secrets exist (Secret Manager)
+      - name: Verify Firebase secrets readable (Secret Manager)
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          gcloud secrets describe FIREBASE_WEB_API_KEY --project="${GCP_PROJECT_ID}"
-          gcloud secrets describe FIREBASE_SERVICE_ACCOUNT_JSON --project="${GCP_PROJECT_ID}"
+          # Use `versions access`, not `secrets describe`: WIF/deploy SAs typically have secretAccessor (access payloads)
+          # without secretmanager.secrets.get (describe). Matches deploy-fly / pin_internal_sidecar expectations.
+          gcloud secrets versions access latest --secret=FIREBASE_WEB_API_KEY --project="${GCP_PROJECT_ID}" >/dev/null
+          gcloud secrets versions access latest --secret=FIREBASE_SERVICE_ACCOUNT_JSON --project="${GCP_PROJECT_ID}" >/dev/null
 
       # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
       # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
