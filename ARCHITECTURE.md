@@ -76,7 +76,24 @@ Key entry files:
 
 This is the **authoritative** high-level picture: what talks to what, and where secrets live.
 
-#### At a glance (simple)
+#### Minimal sketch (single-line graph)
+
+The fastest “what exists” view: one web host, two MCP sidecars, and upstream APIs. (The **expanded** diagram below is more accurate about **Firebase from the UI**, **Gemini tool calling**, and **MCP HTTP**.)
+
+```mermaid
+flowchart LR
+    U["User Browser"] --> W["web (Next.js + Gemini host)"]
+    W --> FB["Firebase Auth + Firestore"]
+    W --> G["Gemini API"]
+    W --> YM["youtube-mcp"]
+    W --> KM["kroger-mcp"]
+    YM --> Y["YouTube Data API"]
+    YM --> S["Supadata Transcript API (native only)"]
+    YM --> T["Direct transcript probe / fallback"]
+    KM --> K["Kroger APIs"]
+```
+
+#### At a glance (expanded — UI · LLM · MCP)
 
 The **browser** talks to **Firebase** (Auth client SDK) and to **web** (same-origin chat / SSE). **Gemini** runs only on the server: each turn the model returns **function calls**, and the **MCP client** in the same process turns those into **Streamable HTTP** requests to the sidecars. Sidecars hold retail/API credentials the LLM never sees.
 
