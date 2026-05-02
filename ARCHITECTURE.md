@@ -78,17 +78,47 @@ This is the **authoritative** high-level picture: what talks to what, and where 
 
 #### At a glance (simple)
 
+The **browser** talks to **Firebase** (Auth client SDK) and to **web** (same-origin chat / SSE). **Gemini** runs only on the server: each turn the model returns **function calls**, and the **MCP client** in the same process turns those into **Streamable HTTP** requests to the sidecars. Sidecars hold retail/API credentials the LLM never sees.
+
 ```mermaid
 flowchart LR
-    U["User Browser"] --> W["web (Next.js + Gemini host)"]
-    W --> FB["Firebase Auth + Firestore"]
-    W --> G["Gemini API"]
-    W --> YM["youtube-mcp"]
-    W --> KM["kroger-mcp"]
-    YM --> Y["YouTube Data API"]
-    YM --> S["Supadata Transcript API (native only)"]
-    YM --> T["Direct transcript probe / fallback"]
-    KM --> K["Kroger APIs"]
+  subgraph Browser["Browser"]
+    UI["Chat UI"]
+  end
+
+  FB[("Firebase · Auth + Firestore")]
+
+  subgraph Web["Next.js server"]
+    Routes["Routes · /api/chat SSE · session"]
+    subgraph Agent["Agent host: LLM + MCP"]
+      GEM["Gemini API · tool calling"]
+      MCP["MCP client · executes model tools"]
+    end
+  end
+
+  subgraph Sidecars["MCP sidecars · Python"]
+    YM["youtube-mcp"]
+    KM["kroger-mcp"]
+  end
+
+  subgraph Upstream["Retail & media APIs"]
+    YT["YouTube Data API"]
+    SUP["Supadata · native captions"]
+    KRO["Kroger OAuth + catalog + cart"]
+  end
+
+  UI -->|same-origin HTTPS · SSE| Routes
+  UI -->|Firebase JS · sign-in / ID token| FB
+  UI -.->|OAuth · user signs in at Kroger| KRO
+  KRO -.->|redirect · auth code| Routes
+  Routes -->|Firebase Admin · cookie + chat writes| FB
+  Routes --> GEM
+  GEM <-->|prompt · functionCalls · tool results| MCP
+  MCP -->|Streamable HTTP MCP| YM
+  MCP -->|Streamable HTTP MCP| KM
+  YM -->|search · probe · caption fallback| YT
+  YM --> SUP
+  KM --> KRO
 ```
 
 #### Detailed trust boundaries
