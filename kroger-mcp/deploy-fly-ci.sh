@@ -82,12 +82,9 @@ if ! command -v flyctl >/dev/null 2>&1; then
   exit 1
 fi
 
-_apps_q="$(flyctl apps list -q 2>/dev/null || true)"
-printf '%s\n' "${_apps_q:-}" | grep -Fqx "$FLY_APP" || {
-  echo "Creating Fly app $FLY_APP ..."
-  flyctl apps create "$FLY_APP" --org "$FLY_ORG" || flyctl apps create "$FLY_APP" || exit 1
-}
-
+# Do not call `flyctl apps list` / `apps create` here: a deploy-scoped token
+# (`fly tokens create deploy -a MYAPP`) returns 401 for those APIs and yields a false "missing app".
+# Create the Fly app once from your laptop if needed (`flyctl launch`/`apps create`).
 echo "Applying Fly secrets (import via stdin; avoids leaking values in argv)..."
 IMPORT_LINES="$(
   KROGER_CLIENT_ID="$KROGER_CLIENT_ID" \
