@@ -6,13 +6,28 @@ import { cn } from "@/lib/utils"
 
 type Tab = "signin" | "signup"
 
-interface LoginScreenProps {
-  onLogin: (name: string, email: string) => void
+export interface AuthUserDto {
+  id: string
+  name: string
+  email: string
 }
 
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+interface LoginScreenProps {
+  onAuthed?: (user: AuthUserDto) => void
+}
+
+export function LoginScreen({ onAuthed }: LoginScreenProps) {
   const [visibleTab, setVisibleTab] = useState<Tab>("signin")
+  const [showForgot, setShowForgot] = useState(false)
   const [fading, setFading] = useState(false)
+
+  const [busy, setBusy] = useState(false)
+  const [formError, setFormError] = useState("")
+
+  /** Forgot password panel */
+  const [fpEmail, setFpEmail] = useState("")
+  const [fpDone, setFpDone] = useState(false)
+  const [fpDevUrl, setFpDevUrl] = useState<string | null>(null)
 
   // Sign In fields
   const [siEmail, setSiEmail] = useState("")
@@ -27,10 +42,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [suConfirm, setSuConfirm] = useState("")
   const [suShowPw, setSuShowPw] = useState(false)
   const [suShowConfirm, setSuShowConfirm] = useState(false)
-  const [suError, setSuError] = useState("")
+  const [suFieldError, setSuFieldError] = useState("")
 
   function switchTab(next: Tab) {
     if (next === visibleTab || fading) return
+    setFormError("")
     setFading(true)
     setTimeout(() => {
       setVisibleTab(next)
@@ -38,32 +54,200 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     }, 130)
   }
 
-  function handleSignIn(e: FormEvent) {
+  async function handleSignIn(e: FormEvent) {
     e.preventDefault()
-    if (!siEmail.trim()) return
-    const parts = siEmail.split("@")[0].split(/[._\-]/)
-    const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ")
-    onLogin(name, siEmail.trim())
+    setFormError("")
+    if (!siEmail.trim() || !siPassword) return
+    setBusy(true)
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email: siEmail.trim(), password: siPassword }),
+      })
+      const data = (await res.json()) as { user?: AuthUserDto; error?: string }
+      if (!res.ok) {
+        setFormError(data.error || "Couldn't sign you in.")
+        return
+      }
+      if (data.user) {
+        localStorage.removeItem("cravecart_user")
+        onAuthed?.(data.user)
+      }
+    } catch {
+      setFormError("Network error. Try again.")
+    } finally {
+      setBusy(false)
+    }
   }
 
-  function handleSignUp(e: FormEvent) {
+  async function handleSignUp(e: FormEvent) {
     e.preventDefault()
-    setSuError("")
+    setSuFieldError("")
+    setFormError("")
     if (suPassword !== suConfirm) {
-      setSuError("Passwords don't match.")
+      setSuFieldError("Passwords don't match.")
       return
     }
     const name = [suFirst.trim(), suLast.trim()].filter(Boolean).join(" ")
-    onLogin(name, suEmail.trim())
+    if (!name || !suEmail.trim()) return
+
+    setBusy(true)
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name,
+          email: suEmail.trim(),
+          password: suPassword,
+        }),
+      })
+      const data = (await res.json()) as { user?: AuthUserDto; error?: string }
+      if (!res.ok) {
+        setFormError(data.error || "Couldn't create account.")
+        return
+      }
+      if (data.user) {
+        localStorage.removeItem("cravecart_user")
+        onAuthed?.(data.user)
+      }
+    } catch {
+      setFormError("Network error. Try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleForgot(e: FormEvent) {
+    e.preventDefault()
+    setFormError("")
+    if (!fpEmail.trim()) return
+    setBusy(true)
+    setFpDone(false)
+    setFpDevUrl(null)
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fpEmail.trim() }),
+      })
+      const data = (await res.json()) as { ok?: boolean; devResetUrl?: string }
+      if (!res.ok) {
+        setFormError("Request failed.")
+        return
+      }
+      setFpDone(true)
+      if (typeof data.devResetUrl === "string") setFpDevUrl(data.devResetUrl)
+    } catch {
+      setFormError("Network error. Try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function openForgot() {
+    setShowForgot(true)
+    setFpEmail(siEmail.trim())
+    setFpDone(false)
+    setFpDevUrl(null)
+    setFormError("")
   }
 
   const inputCls =
     "w-full rounded-xl border border-white/10 bg-white/[0.055] px-4 py-3 text-[14px] text-white placeholder:text-white/25 transition-all duration-200 focus:border-primary/45 focus:bg-white/8 focus:outline-none focus:ring-2 focus:ring-primary/15"
 
+  if (showForgot) {
+    return (
+      <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
+        <div className="w-full max-w-[420px] space-y-7">
+          <div className="flex flex-col items-center text-center">
+            <div className="relative mb-4 inline-flex">
+              <div className="absolute inset-0 rounded-2xl bg-primary/30 blur-xl" />
+              <div className="relative flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/25 via-primary/12 to-transparent shadow-xl shadow-primary/10">
+                <ShoppingCart className="h-[26px] w-[26px] text-primary" />
+              </div>
+            </div>
+            <h1 className="text-[26px] font-semibold tracking-tight text-white">Reset password</h1>
+            <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">
+              {fpDone ? "Follow the reset link." : "We’ll email instructions when SMTP is wired; in development the link prints in the terminal."}
+            </p>
+          </div>
+
+          <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[oklch(0.135_0.02_248/0.85)] shadow-2xl shadow-black/50 backdrop-blur-2xl">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
+            <div className="px-7 py-6">
+              {fpDone ? (
+                <div className="space-y-4">
+                  <p className="text-[14px] leading-relaxed text-white/65">
+                    If an account exists for that address, a reset flow was started. Production should deliver this via
+                    email.
+                  </p>
+                  {fpDevUrl ? (
+                    <div className="rounded-xl border border-primary/25 bg-primary/10 p-4">
+                      <p className="text-[11px] uppercase tracking-[0.14em] text-primary/75">Development reset link</p>
+                      <a
+                        href={fpDevUrl}
+                        className="mt-2 block break-all text-[13px] text-primary underline underline-offset-2 hover:text-white"
+                      >
+                        {fpDevUrl}
+                      </a>
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgot(false)
+                      setFpDone(false)
+                      setFpDevUrl(null)
+                    }}
+                    className="mt-2 w-full rounded-full border border-white/10 py-3 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/6"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgot} noValidate className="space-y-4">
+                  <Field label="Email" htmlFor="fp-email">
+                    <input
+                      id="fp-email"
+                      type="email"
+                      value={fpEmail}
+                      onChange={(e) => setFpEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      autoComplete="email"
+                      autoFocus
+                      required
+                      className={inputCls}
+                    />
+                  </Field>
+                  {formError ? <p className="text-[13px] text-rose-400">{formError}</p> : null}
+                  <SubmitButton disabled={!fpEmail.trim() || busy}>{busy ? "Sending…" : "Send reset link"}</SubmitButton>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setShowForgot(false)
+                      setFormError("")
+                    }}
+                    className="w-full text-center text-[12px] text-white/35 transition-colors hover:text-white/55"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
   return (
     <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
       <div className="w-full max-w-[420px] space-y-7">
-
         {/* Brand */}
         <div className="flex flex-col items-center text-center">
           <div className="relative mb-4 inline-flex">
@@ -73,14 +257,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             </div>
           </div>
           <h1 className="text-[26px] font-semibold tracking-tight text-white">CraveCart</h1>
-          <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">
-            AI-powered food planning and grocery shopping
-          </p>
+          <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">AI-powered food planning and grocery shopping</p>
         </div>
 
         {/* Auth card */}
         <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[oklch(0.135_0.02_248/0.85)] shadow-2xl shadow-black/50 backdrop-blur-2xl">
-          {/* Top gradient accent line */}
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           {/* Tab bar */}
@@ -90,16 +271,17 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 key={t}
                 type="button"
                 onClick={() => switchTab(t)}
+                disabled={busy}
                 className={cn(
-                  "relative flex-1 py-4 text-[13px] font-medium tracking-wide transition-colors duration-200 focus-visible:outline-none",
-                  visibleTab === t ? "text-white" : "text-white/35 hover:text-white/60"
+                  "relative flex-1 py-4 text-[13px] font-medium tracking-wide transition-colors duration-200 focus-visible:outline-none disabled:opacity-40",
+                  visibleTab === t ? "text-white" : "text-white/35 hover:text-white/60",
                 )}
               >
                 {t === "signin" ? "Sign In" : "Sign Up"}
                 <span
                   className={cn(
                     "absolute bottom-0 left-6 right-6 h-[2px] rounded-full bg-primary transition-all duration-300",
-                    visibleTab === t ? "opacity-100 scale-x-100" : "opacity-0 scale-x-0"
+                    visibleTab === t ? "opacity-100 scale-x-100" : "opacity-0 scale-x-0",
                   )}
                   style={{ transformOrigin: "center" }}
                 />
@@ -111,7 +293,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           <div
             className={cn(
               "px-7 py-6 transition-[opacity,transform] duration-[130ms]",
-              fading ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100"
+              fading ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100",
             )}
           >
             {visibleTab === "signin" ? (
@@ -143,23 +325,26 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   />
                 </Field>
 
-                <div className="flex justify-end -mt-1">
+                <div className="-mt-1 flex justify-end">
                   <button
                     type="button"
+                    onClick={openForgot}
                     className="text-[12px] text-primary/65 transition-colors hover:text-primary focus-visible:underline focus-visible:outline-none"
                   >
                     Forgot password?
                   </button>
                 </div>
 
-                <SubmitButton disabled={!siEmail.trim()}>Sign In</SubmitButton>
+                {formError ? <p className="text-[13px] text-rose-400">{formError}</p> : null}
+                <SubmitButton disabled={!siEmail.trim() || !siPassword || busy}>{busy ? "Signing in…" : "Sign In"}</SubmitButton>
 
                 <p className="text-center text-[12px] text-white/30">
                   Don't have an account?{" "}
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => switchTab("signup")}
-                    className="text-primary/70 hover:text-primary transition-colors focus-visible:outline-none focus-visible:underline"
+                    className="text-primary/70 hover:text-primary transition-colors focus-visible:outline-none focus-visible:underline disabled:opacity-40"
                   >
                     Sign up
                   </button>
@@ -189,6 +374,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                       onChange={(e) => setSuLast(e.target.value)}
                       placeholder="Doe"
                       autoComplete="family-name"
+                      required
                       className={inputCls}
                     />
                   </Field>
@@ -224,28 +410,35 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   <PasswordInput
                     id="su-confirm"
                     value={suConfirm}
-                    onChange={(v) => { setSuConfirm(v); setSuError("") }}
+                    onChange={(v) => {
+                      setSuConfirm(v)
+                      setSuFieldError("")
+                    }}
                     show={suShowConfirm}
                     onToggle={() => setSuShowConfirm((p) => !p)}
                     placeholder="••••••••"
                     autoComplete="new-password"
-                    className={cn(inputCls, suError ? "border-rose-500/50 focus:border-rose-500/60" : "")}
+                    className={cn(inputCls, suFieldError ? "border-rose-500/50 focus:border-rose-500/60" : "")}
                   />
-                  {suError && (
-                    <p className="mt-1 text-[11px] text-rose-400">{suError}</p>
-                  )}
+                  {suFieldError ? <p className="mt-1 text-[11px] text-rose-400">{suFieldError}</p> : null}
                 </Field>
 
-                <SubmitButton disabled={!suFirst.trim() || !suEmail.trim() || !suPassword || !suConfirm}>
-                  Create Account
+                {formError ? <p className="text-[13px] text-rose-400">{formError}</p> : null}
+                <SubmitButton
+                  disabled={
+                    !suFirst.trim() || !suEmail.trim() || !suPassword || !suConfirm || suPassword.length < 8 || busy
+                  }
+                >
+                  {busy ? "Creating account…" : "Create Account"}
                 </SubmitButton>
 
                 <p className="text-center text-[12px] text-white/30">
                   Already have an account?{" "}
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => switchTab("signin")}
-                    className="text-primary/70 hover:text-primary transition-colors focus-visible:outline-none focus-visible:underline"
+                    className="text-primary/70 hover:text-primary transition-colors focus-visible:outline-none focus-visible:underline disabled:opacity-40"
                   >
                     Sign in
                   </button>
@@ -255,9 +448,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           </div>
         </div>
 
-        <p className="text-center text-[11px] text-white/18">
-          Powered by Gemini · YouTube · Kroger
-        </p>
+        <p className="text-center text-[11px] text-white/18">Powered by Gemini · YouTube · Kroger</p>
       </div>
     </main>
   )
@@ -277,7 +468,14 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
 }
 
 function PasswordInput({
-  id, value, onChange, show, onToggle, placeholder, autoComplete, className,
+  id,
+  value,
+  onChange,
+  show,
+  onToggle,
+  placeholder,
+  autoComplete,
+  className,
 }: {
   id: string
   value: string
@@ -322,7 +520,7 @@ function SubmitButton({ children, disabled }: { children: React.ReactNode; disab
         "shadow-lg shadow-primary/20 transition-all duration-200",
         "hover:shadow-primary/35 hover:brightness-110",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50",
-        "disabled:cursor-not-allowed disabled:opacity-35"
+        "disabled:cursor-not-allowed disabled:opacity-35",
       )}
     >
       {children}

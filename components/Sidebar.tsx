@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { LogOut, MessageSquare, Plus, Search, Settings, ShoppingCart, X } from "lucide-react"
+import { LogOut, MessageSquare, Plus, Search, ShoppingCart, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export interface ChatSession {

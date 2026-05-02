@@ -20,6 +20,7 @@ dist/
 tsconfig.tsbuildinfo
 
 # Local runtime and cache data
+.data/
 .runtime/
 .tmp-*
 kroger-mcp/data/

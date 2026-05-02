@@ -1,5 +1,6 @@
 import { runAgentTurn } from "@/lib/agent/runAgentTurn"
 import { chatRequestSchema } from "@/lib/agent/schemas"
+import { getSessionUser } from "@/lib/server/auth/getSessionUser"
 import { ensureSessionId } from "@/lib/kroger/session"
 
 export const runtime = "nodejs"
@@ -7,6 +8,14 @@ export const runtime = "nodejs"
 const encoder = new TextEncoder()
 
 export async function POST(request: Request) {
+  const authedUser = await getSessionUser()
+  if (!authedUser) {
+    return new Response(JSON.stringify({ type: "error", message: "Sign in to chat." }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
   let payload: ReturnType<typeof chatRequestSchema.parse> | null = null
 
   try {

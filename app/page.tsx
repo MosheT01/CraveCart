@@ -24,6 +24,7 @@ import { KrogerConnectButton } from "@/components/KrogerConnectButton"
 import { cn } from "@/lib/utils"
 import { WelcomeHero } from "@/components/WelcomeHero"
 import type { AgentStreamEvent, CartArtifact, ChatMessage, ToolTraceEntry, VideoArtifact } from "@/lib/types"
+import type { AuthUserDto } from "@/components/LoginScreen"
 
 const EXAMPLES = [
   { icon: Flame, text: "I'm craving an American cheeseburger" },
@@ -59,9 +60,12 @@ interface StoredMessage {
 }
 
 interface User {
+  id: string
   name: string
   email: string
 }
+
+const HISTORY_SYNC_FLAG = "cravecart_hist_synced_v1"
 
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
@@ -79,11 +83,6 @@ export default function HomePage() {
   const latestMessagesRef = useRef<UiMessage[]>([])
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("cravecart_user")
-      if (raw) setUser(JSON.parse(raw) as User)
-    } catch {}
-
     const pending = localStorage.getItem("cravecart_kroger_pending")
     if (pending) {
       localStorage.removeItem("cravecart_kroger_pending")
@@ -94,12 +93,22 @@ export default function HomePage() {
       if (localStorage.getItem("cravecart_kroger_mock")) setKrogerIsMock(true)
     }
 
-    try {
-      const rawSessions = localStorage.getItem("cravecart_sessions")
-      if (rawSessions) setSessions(JSON.parse(rawSessions) as ChatSession[])
-    } catch {}
-
-    setUserLoaded(true)
+    ;(async () => {
+      try {
+        const meRes = await fetch("/api/auth/me", { credentials: "same-origin" })
+        const meData = (await meRes.json()) as { user: User | null }
+        const authedUser = meData.user
+        if (authedUser) {
+          setUser(authedUser)
+          await loadSessionsForUser(authedUser.id)
+          await migrateLocalHistoryIfNeeded()
+        }
+      } catch {
+        // stay logged out — LoginScreen gates the app
+      } finally {
+        setUserLoaded(true)
+      }
+    })()
 
     fetch("/api/kroger/auth/start", { method: "POST" })
       .then((r) => r.json())
@@ -113,6 +122,116 @@ export default function HomePage() {
       })
       .catch(() => {})
   }, [])
+
+  async function loadSessionsForUser(_userId: string) {
+    try {
+      const r = await fetch("/api/chat-sessions", { credentials: "same-origin" })
+      if (!r.ok) return
+      const data = (await r.json()) as { sessions?: ChatSession[] }
+      const list = data.sessions ?? []
+      setSessions(list)
+
+      const last = sessionStorage.getItem("cravecart_active_session")
+      if (last && list.some((s) => s.id === last)) {
+        handleSelectSessionFromServer(last)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function migrateLocalHistoryIfNeeded() {
+    if (localStorage.getItem(HISTORY_SYNC_FLAG)) return
+    let localList: ChatSession[] = []
+    try {
+      const rawSessions = localStorage.getItem("cravecart_sessions")
+      if (!rawSessions) return
+      localList = JSON.parse(rawSessions) as ChatSession[]
+      if (!Array.isArray(localList) || localList.length === 0) return
+    } catch {
+      return
+    }
+
+    try {
+      const check = await fetch("/api/chat-sessions", { credentials: "same-origin" })
+      if (!check.ok) return
+      const existing = ((await check.json()) as { sessions?: ChatSession[] }).sessions ?? []
+      if (existing.length > 0) {
+        localStorage.setItem(HISTORY_SYNC_FLAG, "1")
+        return
+      }
+    } catch {
+      return
+    }
+
+    const messagesBySession: Record<string, StoredMessage[]> = {}
+    for (const s of localList) {
+      try {
+        const raw = localStorage.getItem(`cravecart_session_${s.id}`)
+        if (raw) messagesBySession[s.id] = JSON.parse(raw) as StoredMessage[]
+      } catch {}
+    }
+
+    try {
+      const ir = await fetch("/api/chat-sessions", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessions: localList, messagesBySession }),
+      })
+      if (ir.ok) {
+        localStorage.setItem(HISTORY_SYNC_FLAG, "1")
+        setSessions(localList)
+      }
+    } catch {}
+  }
+
+  async function handleSelectSessionFromServer(id: string) {
+    setActiveSessionId(id)
+    setSidebarOpen(false)
+    sessionStorage.setItem("cravecart_active_session", id)
+    try {
+      const r = await fetch(`/api/chat-sessions/${encodeURIComponent(id)}`, {
+        credentials: "same-origin",
+      })
+      if (!r.ok) {
+        try {
+          const rawLs = localStorage.getItem(`cravecart_session_${id}`)
+          if (!rawLs) return
+          const stored = JSON.parse(rawLs) as StoredMessage[]
+          const restoredLs: UiMessage[] = stored.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            status: "idle",
+            traces: [],
+            video: m.video as VideoArtifact | null,
+            cart: m.cart as CartArtifact | null,
+            authUrl: null,
+            error: null,
+          }))
+          setMessages(restoredLs)
+          latestMessagesRef.current = restoredLs
+        } catch {}
+        return
+      }
+      const data = (await r.json()) as { messages?: StoredMessage[] }
+      const rows = data.messages ?? []
+      const restored: UiMessage[] = rows.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        status: "idle",
+        traces: [],
+        video: m.video as VideoArtifact | null,
+        cart: m.cart as CartArtifact | null,
+        authUrl: null,
+        error: null,
+      }))
+      setMessages(restored)
+      latestMessagesRef.current = restored
+    } catch {}
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
@@ -129,15 +248,24 @@ export default function HomePage() {
     })
   }
 
-  function handleLogin(name: string, email: string) {
-    const u: User = { name, email }
-    setUser(u)
-    localStorage.setItem("cravecart_user", JSON.stringify(u))
+  function handleAuthed(next: AuthUserDto) {
+    setUser({ id: next.id, name: next.name, email: next.email })
+    void loadSessionsForUser(next.id)
+    void migrateLocalHistoryIfNeeded()
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" })
+    } catch {
+      // still clear client
+    }
     setUser(null)
-    localStorage.removeItem("cravecart_user")
+    setSessions([])
+    setActiveSessionId(null)
+    setMessages([])
+    latestMessagesRef.current = []
+    sessionStorage.removeItem("cravecart_active_session")
   }
 
   function handleKrogerConnected() {
@@ -149,31 +277,12 @@ export default function HomePage() {
     setMessages([])
     latestMessagesRef.current = []
     setActiveSessionId(null)
+    sessionStorage.removeItem("cravecart_active_session")
     setSidebarOpen(false)
   }
 
   function handleSelectSession(id: string) {
-    setActiveSessionId(id)
-    setSidebarOpen(false)
-    try {
-      const raw = localStorage.getItem(`cravecart_session_${id}`)
-      if (raw) {
-        const stored = JSON.parse(raw) as StoredMessage[]
-        const restored: UiMessage[] = stored.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          status: "idle",
-          traces: [],
-          video: m.video,
-          cart: m.cart,
-          authUrl: null,
-          error: null,
-        }))
-        setMessages(restored)
-        latestMessagesRef.current = restored
-      }
-    } catch {}
+    void handleSelectSessionFromServer(id)
   }
 
   function persistSession(sessionId: string, title: string, msgs: UiMessage[]) {
@@ -194,6 +303,13 @@ export default function HomePage() {
       localStorage.setItem("cravecart_sessions", JSON.stringify(updated))
       return updated
     })
+
+    void fetch(`/api/chat-sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, messages: stored }),
+    }).catch(() => {})
   }
 
   async function submitPrompt(prompt: string) {
@@ -204,7 +320,10 @@ export default function HomePage() {
     const historyForRequest = [...messages, userMessage]
 
     const sessionId = activeSessionId ?? crypto.randomUUID()
-    if (!activeSessionId) setActiveSessionId(sessionId)
+    if (!activeSessionId) {
+      setActiveSessionId(sessionId)
+      sessionStorage.setItem("cravecart_active_session", sessionId)
+    }
     const sessionTitle = prompt.length > 42 ? prompt.slice(0, 42) + "…" : prompt
 
     updateMessages(() => [...historyForRequest, assistantMessage])
@@ -213,9 +332,15 @@ export default function HomePage() {
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: toChatHistory(historyForRequest) }),
       })
+
+      if (response.status === 401) {
+        setUser(null)
+        throw new Error("Sign in again to continue chatting.")
+      }
 
       if (!response.ok || !response.body) {
         const text = await response.text()
@@ -317,7 +442,7 @@ export default function HomePage() {
 
   if (!userLoaded) return null
 
-  if (!user) return <LoginScreen onLogin={handleLogin} />
+  if (!user) return <LoginScreen onAuthed={handleAuthed} />
 
   const firstName = user.name.split(" ")[0]
 

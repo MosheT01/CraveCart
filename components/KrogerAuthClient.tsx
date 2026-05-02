@@ -21,10 +21,6 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
     if (state.mode === "connected") {
       localStorage.setItem("cravecart_kroger_connected", "1")
     }
-    if (state.mode === "mock") {
-      localStorage.setItem("cravecart_kroger_connected", "1")
-      localStorage.setItem("cravecart_kroger_mock", "1")
-    }
   }, [state.mode])
 
   useEffect(() => {
