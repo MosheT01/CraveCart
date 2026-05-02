@@ -48,7 +48,7 @@ function ResetPasswordForm() {
         const auth = getAuth(getFirebaseBrowserApp(cfg))
         await confirmPasswordReset(auth, oobCode, pw)
       } catch (err) {
-        setError(mapFirebaseAuthError(err))
+        setError(mapFirebaseAuthError(err, "passwordReset"))
         return
       }
       setDone(true)

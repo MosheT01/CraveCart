@@ -4,7 +4,6 @@ import { useEffect, useState, type FormEvent } from "react"
 import {
   createUserWithEmailAndPassword,
   getAuth,
-  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   updateProfile,
 } from "firebase/auth"
@@ -14,6 +13,7 @@ import {
   getFirebaseBrowserApp,
   mapFirebaseAuthError,
   postFirebaseSessionCookie,
+  sendCravecartPasswordResetEmail,
   type LoadedFirebaseBrowserConfig,
 } from "@/lib/firebase/clientAuth"
 import { cn } from "@/lib/utils"
@@ -114,7 +114,7 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
           onAuthed?.(user)
         }
       } catch (err) {
-        setFormError(mapFirebaseAuthError(err))
+        setFormError(mapFirebaseAuthError(err, "signIn"))
       }
     } catch {
       setFormError("Network error. Try again.")
@@ -156,7 +156,7 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
           onAuthed?.(user)
         }
       } catch (err) {
-        setFormError(mapFirebaseAuthError(err))
+        setFormError(mapFirebaseAuthError(err, "signUp"))
       }
     } catch {
       setFormError("Network error. Try again.")
@@ -179,17 +179,10 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
       try {
         const auth = getAuth(getFirebaseBrowserApp(fbCfg))
         const origin =
-          typeof window !== "undefined" && window.location?.origin?.trim?.() ? window.location.origin : ""
-        if (origin) {
-          await sendPasswordResetEmail(auth, fpEmail.trim(), {
-            url: `${origin}/auth/reset-password`,
-            handleCodeInApp: false,
-          })
-        } else {
-          await sendPasswordResetEmail(auth, fpEmail.trim())
-        }
+          typeof window !== "undefined" && window.location?.origin?.trim?.() ? window.location.origin.trim() : ""
+        await sendCravecartPasswordResetEmail(auth, fpEmail.trim(), origin)
       } catch (err) {
-        setFormError(mapFirebaseAuthError(err))
+        setFormError(mapFirebaseAuthError(err, "passwordReset"))
         return
       }
       setFpDone(true)
