@@ -7,39 +7,37 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: cravecart-deploy-${{ github.ref }}
+  group: cd-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   id-token: write
 
-# GCP Secret Manager ↔ Cloud Run: cloudbuild attaches secrets with --set-secrets (Gemini/Kroger/YouTube/internal).
-# Fly: deploy-fly-ci.sh reads SM at release time → fly secrets import (stdin); keep INTERNAL_SIDECAR_SECRET aligned with GCP.
-# Security: Prefer Workload Identity (GCP_USE_WIF=true); avoid GCP_SA_KEY if you can — see docs/deploy-cloud-run.md.
-# Do not enable ACTIONS_STEP_DEBUG on this workflow (bash xtrace can leak env). deploy-fly-ci.sh registers ::add-mask:: for SM values.
+# Sensitive deploy inputs use Actions *secrets* (shown as *** in logs), not *variables*,
+# which are echoed plainly in workflow expansion. Local fly.toml slug may still be visible in-repo.
+# See docs/deploy-cloud-run.md → migration from Variables → Secrets.
 
 jobs:
   deploy-gcp-then-fly:
     runs-on: ubuntu-latest
     env:
       CLOUDSDK_VERBOSITY: error
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      # Cloud Build substitutions (single comma-separated string for gcloud builds submit).
-      _SUBSTITUTIONS: _AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${{ vars.KROGER_LOCATION_ID }},_EXTERNAL_KROGER_SIDECAR_URL=${{ vars.EXTERNAL_KROGER_SIDECAR_URL }},_KROGER_API_HOST=${{ vars.KROGER_API_HOST }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate CI configuration
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          KROGER_LOCATION_ID: ${{ secrets.KROGER_LOCATION_ID }}
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
         run: |
           set -euo pipefail
-          test -n "${GCP_PROJECT_ID:-}" || { echo "Set GitHub variable GCP_PROJECT_ID (e.g. your-project-id)."; exit 1; }
-          test -n "${{ vars.EXTERNAL_KROGER_SIDECAR_URL }}" || { echo "Set GitHub variable EXTERNAL_KROGER_SIDECAR_URL (e.g. https://YOUR_APP.fly.dev)."; exit 1; }
-          test -n "${{ vars.KROGER_LOCATION_ID }}" || { echo "Set GitHub variable KROGER_LOCATION_ID (Kroger store location id)."; exit 1; }
-
-      # Pick ONE auth strategy: OIDC/WIF recommended; see docs/deploy-cloud-run.md (GitHub Actions CD).
+          test -n "${GCP_PROJECT_ID:-}" || { echo "Missing Actions secret GCP_PROJECT_ID." >&2; exit 1; }
+          test -n "${KROGER_LOCATION_ID:-}" || { echo "Missing Actions secret KROGER_LOCATION_ID." >&2; exit 1; }
+          test -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" || { echo "Missing Actions secret EXTERNAL_KROGER_SIDECAR_URL." >&2; exit 1; }
 
       - name: Authenticate to Google Cloud (Workload Identity Federation)
         if: ${{ vars.GCP_USE_WIF == 'true' }}
@@ -57,15 +55,24 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Submit Cloud Build (web + youtube MCP + Artifact Registry images)
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          KROGER_LOCATION_ID: ${{ secrets.KROGER_LOCATION_ID }}
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
+          KROGER_API_HOST: ${{ secrets.KROGER_API_HOST }}
         run: |
           set -euo pipefail
+          SUBS="_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${KROGER_LOCATION_ID},_EXTERNAL_KROGER_SIDECAR_URL=${EXTERNAL_KROGER_SIDECAR_URL}"
+          if [[ -n "${KROGER_API_HOST:-}" ]]; then
+            SUBS="${SUBS},_KROGER_API_HOST=${KROGER_API_HOST}"
+          fi
           gcloud builds submit \
             --config=cloudbuild.yaml \
             --project="${GCP_PROJECT_ID}" \
-            --substitutions="${_SUBSTITUTIONS}"
+            --substitutions="${SUBS}"
 
       - name: Set up Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@v1
@@ -73,10 +80,12 @@ jobs:
       - name: Deploy Kroger MCP to Fly.io
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ secrets.FLY_APP_NAME }}
           FLY_ORG: ${{ vars.FLY_ORG }}
-          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: us-central1
         run: |
           set -euo pipefail
-          test -n "${FLY_API_TOKEN:-}" || { echo "Set GitHub secret FLY_API_TOKEN (fly tokens create)." ; exit 1; }
+          test -n "${FLY_API_TOKEN:-}" || { echo "Missing Actions secret FLY_API_TOKEN." >&2; exit 1; }
+          test -n "${FLY_APP:-}" || { echo "Missing Actions secret FLY_APP_NAME (Fly Machines app slug); set it to override fly.toml without logging the slug." >&2; exit 1; }
           bash kroger-mcp/deploy-fly-ci.sh

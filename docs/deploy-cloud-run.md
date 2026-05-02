@@ -253,21 +253,22 @@ The workflow [`.github/workflows/deploy-main.yml`](../.github/workflows/deploy-m
 
 ### One-time repo configuration (GitHub)
 
-**Repository Variables** (**Settings → Secrets and variables → Actions → Variables**):
+**Repository Variables** (non‑sensitive only; **`variables` expand in plaintext in job logs**, so avoid putting GCP project IDs, store IDs, or sidecar URLs here):
 
 | Variable | Example | Purpose |
 | -------- | ------- | ------- |
-| `GCP_PROJECT_ID` | `youtube-recipe-494816` | Project passed to **`gcloud builds submit`** |
-| `KROGER_LOCATION_ID` | `01400513` | Substitution for **`_KROGER_LOCATION_ID`** in Cloud Build (must match Kroger/store config) |
-| `EXTERNAL_KROGER_SIDECAR_URL` | `https://cravecart-kroger-mcp.fly.dev` | Substitution for **`_EXTERNAL_KROGER_SIDECAR_URL`** (Fly origin **without** `/mcp/`). |
-| `FLY_ORG` | _(omit)_ → `personal` | Only if **`flyctl apps create`** cannot default your org slug when bootstrapping a new Fly app. |
-| `KROGER_API_HOST` | _empty or_ `api-ce.kroger.com` | Optional; forwarded as **`_KROGER_API_HOST`** (_empty_ ⇒ production Kroger API) |
 | `GCP_USE_WIF` | `true` or omit | **`true`** uses Workload Identity below; omit or **`false`** uses a stored JSON service account |
+| `FLY_ORG` | _(omit)_ → `personal` | Only if **`flyctl`** cannot default your org slug when bootstrapping a Fly app |
 
-**Secrets** (**Actions → Secrets**):
+**Secrets** (**Actions → Secrets**) — CI reads these via **`secrets.*`** so GitHub masks them (**`***`**) wherever masking applies. Use **Secrets** (not Variables) for project, Kroger substitution, Fly app slug, and sidecar URL.
 
 | Secret | When |
 | ------ | ----- |
+| `GCP_PROJECT_ID` | Always — passed to **`gcloud`** / **`deploy-fly-ci.sh`** (**`GCP_PROJECT`**). |
+| `KROGER_LOCATION_ID` | Always if you rely on **`_KROGER_LOCATION_ID`** in Cloud Build (must match Kroger/store config). |
+| `EXTERNAL_KROGER_SIDECAR_URL` | Always when hybrid Kroger lives on Fly — origin **`https://YOUR_APP.fly.dev`** **without** `/mcp/` (Cloud Build **`_EXTERNAL_KROGER_SIDECAR_URL`**). |
+| `FLY_APP_NAME` | Always for Actions — Fly Machines **`app`** slug (**`deploy-fly-ci.sh`** **`FLY_APP`**). Must match the app you deploy; GitHub masks this in logs. Any concrete **`app = "…"`** in **`kroger-mcp/fly.toml`** is still visible to anyone with the repo — rename the Fly app and update **`fly.toml`** if that must not disclose production. |
+| `KROGER_API_HOST` | Optional — if set, passed as **`_KROGER_API_HOST`** (_unset_ ⇒ default Kroger API host in build). |
 | `FLY_API_TOKEN` | Always. Create via **`fly tokens create`** scoped to deploy. |
 | `GCP_SA_KEY` | If **`GCP_USE_WIF`** is not **`true`** — JSON key for an SA that may **submit builds** (**`roles/cloudbuild.builds.editor`** or **`roles/run.admin`** + Artifact Registry **`writer`**, plus **`roles/iam.serviceAccountUser`** on the Cloud Build / runtime principals your project expects). If you use **`deploy-fly-ci.sh`**, the same principal must **`secretAccessor`** on **`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`** (optional **`KROGER_LOCATION_ID`**), matching local **`deploy-fly.ps1 -FromGcpSecretManager`** expectations. Mirrors what you already use locally for **`gcloud builds submit`**. |
 
@@ -286,7 +287,7 @@ Set **`GCP_USE_WIF=true`** after following [Google’s “Configure Workload Ide
 | ------- | --------- |
 | **Cloud Run (`cravecart-web`, MCPs)** | [`cloudbuild.yaml`](../cloudbuild.yaml) **`--set-secrets …=SECRET_NAME:latest`**. Containers receive env vars from mounted Secret Manager payloads (no plaintext values in YAML). Rotate by adding Secret Manager versions; redeploy pulls **`latest`** (usually what you want for CI/CD). |
 | **Fly Kroger MCP** | [`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) runs **`gcloud secrets versions access`** for **`KROGER_CLIENT_*`**, **`INTERNAL_SIDECAR_SECRET`**, optionally **`KROGER_LOCATION_ID`**, then **`fly secrets import`** on each **`main`** deploy so Fly stays aligned with GCP. **`INTERNAL_SIDECAR_SECRET`** must be the **same logical value** GCP uses for **`cravecart-web`** (`--set-secrets INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest`). |
-| **`KROGER_LOCATION_ID`** | Prefer the Cloud Build **`_KROGER_LOCATION_ID`** substitution (GitHub **`KROGER_LOCATION_ID`** repo variable → deploy env); the script falls back to **Secret Manager secret** `KROGER_LOCATION_ID` or the live **`cravecart-web`** env if present. |
+| **`KROGER_LOCATION_ID`** | Prefer the Cloud Build **`_KROGER_LOCATION_ID`** substitution (GitHub Actions secret **`KROGER_LOCATION_ID`**); the script falls back to **Secret Manager secret** `KROGER_LOCATION_ID` or the live **`cravecart-web`** env if present. |
 
 ### Security notes (reasonable defaults)
 
@@ -294,13 +295,14 @@ Set **`GCP_USE_WIF=true`** after following [Google’s “Configure Workload Ide
 - **Prefer Workload Identity Federation** (**`GCP_USE_WIF=true`**) instead of **`GCP_SA_KEY`**: OIDC exchanges short-lived GCP tokens (`id-token` permission enables this); long‑lived JSON keys increase blast radius if leaked.
 - **Grant least IAM to the CI identity**: e.g. **submit Cloud Build**, **Artifact Registry Writer**, **`serviceAccountUser`** as your project requires, plus **`secretmanager.secretAccessor`** only on the secrets the Fly sync script reads (**`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`**, optional **`KROGER_LOCATION_ID`**). Avoid **`roles/editor`** or **`roles/owner`** on the key or SA.
 - **Fly**: [`deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) publishes secrets via **stdin** to **`fly secrets import`** so values are less likely than **`fly secrets set`** to appear in **`ps`**/`argv`; still treat tokens as sensitive (masked **`FLY_API_TOKEN`** keeps logs clean).
-- **Action logs**: **`deploy-fly-ci.sh`** registers **`::add-mask::`** for OAuth / **`INTERNAL_SIDECAR_SECRET`** / location id strings after reading Secret Manager (substrings appearing later in that job log are redacted). The deploy workflow sets **`CLOUDSDK_VERBOSITY=error`**. Avoid **`ACTIONS_STEP_DEBUG`** on this workflow (bash **xtrace** can print sensitive lines).
+- **Action logs**: **`deploy-fly-ci.sh`** registers **`::add-mask::`** for OAuth / **`INTERNAL_SIDECAR_SECRET`** / location id / project / web URL / redirect / Fly app after resolution (substrings appearing later in that job log are redacted). Deploy inputs that used to be **Variables** are **Secrets** so they are not dumped in the initial **`env:`** block. **`gcloud builds submit`** and **Google Cloud Build** console logs may still record substitution values — treat that as separate from GitHub. The deploy workflow sets **`CLOUDSDK_VERBOSITY=error`**. Avoid **`ACTIONS_STEP_DEBUG`** on this workflow (bash **xtrace** can print sensitive lines).
 - **Remaining risk**: any CI that can read secrets and call deploy can pivot (standard for automated deploy pipelines). Rotate **`FLY_API_TOKEN`** periodically; revoke compromised SA keys/WIF attachments immediately.
 
 ### Operational notes
 
 - Runs on **`ubuntu-latest`**: CI steps are POSIX **`bash`** (avoid PowerShell-only syntax in **`deploy-fly-ci.sh`**).
 - GitHub-hosted runners already handle **`--substitutions`** as single arguments; local **PowerShell** still needs quoting (see **[Deploy with Cloud Build](#deploy-with-cloud-build)** above).
+- **Migrating from old repo Variables** (if you previously set **`GCP_PROJECT_ID`**, **`KROGER_LOCATION_ID`**, **`EXTERNAL_KROGER_SIDECAR_URL`** as Variables): copy each value into the matching **Secret** above, add **`FLY_APP_NAME`**, then delete the Variables (e.g. **`gh variable delete GCP_PROJECT_ID`**, etc.) so future workflow runs do not treat them as missing.
 
 ## Related files
 

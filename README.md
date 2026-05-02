@@ -38,6 +38,7 @@ The browser only talks to the Next.js app. Kroger tokens stay server-side in the
 - `KROGER_REDIRECT_URI`
 - `KROGER_LOCATION_ID`
 - `APP_BASE_URL`
+- `INTERNAL_SIDECAR_SECRET` (required for Compose if you expose sidecars auth; matches GCP Secret **`INTERNAL_SIDECAR_SECRET`** in Cloud Run prod)
 
 Optional local overrides:
 
@@ -63,8 +64,8 @@ docker compose up --build
 Services:
 
 - `web` on [http://localhost:3000](http://localhost:3000)
-- `youtube-mcp` on [http://localhost:8100](http://localhost:8100)
-- `kroger-mcp` on [http://localhost:8000](http://localhost:8000)
+
+`youtube-mcp` and `kroger-mcp` are reachable only inside the Compose network (**not** mapped to host ports); set **`INTERNAL_SIDECAR_SECRET`** in `.env` so only the Next server can call them (see [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md)).
 
 ### Google Cloud Run (production)
 

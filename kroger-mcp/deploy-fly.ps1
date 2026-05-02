@@ -108,6 +108,7 @@ if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
 $cId = ""
 $cSec = ""
 $loc = ""
+$internalSecret = ""
 
 if ($FromGcpSecretManager) {
     Write-Host "Reading KROGER_CLIENT_ID / KROGER_CLIENT_SECRET from Secret Manager (project: $GcpProject) ..."
@@ -119,6 +120,12 @@ if ($FromGcpSecretManager) {
     $cSec = (& gcloud secrets versions access latest --secret=KROGER_CLIENT_SECRET --project=$GcpProject 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($cSec)) {
         Write-Error "Could not read KROGER_CLIENT_SECRET from Secret Manager."
+        exit 1
+    }
+    Write-Host "Reading INTERNAL_SIDECAR_SECRET (must match cravecart-web on Cloud Run) ..."
+    $internalSecret = (& gcloud secrets versions access latest --secret=INTERNAL_SIDECAR_SECRET --project=$GcpProject 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($internalSecret)) {
+        Write-Error "Could not read INTERNAL_SIDECAR_SECRET from Secret Manager. Create it once (openssl rand -base64 32 | gcloud secrets create INTERNAL_SIDECAR_SECRET --data-file=-)."
         exit 1
     }
 }
@@ -139,6 +146,7 @@ if ($UseParentEnv) {
                 "KROGER_CLIENT_ID" { $cId = $v }
                 "KROGER_CLIENT_SECRET" { $cSec = $v }
                 "KROGER_LOCATION_ID" { $loc = $v }
+                "INTERNAL_SIDECAR_SECRET" { $internalSecret = $v }
             }
         }
     }
@@ -159,7 +167,11 @@ if (-not $cId) { $cId = Read-Host "KROGER_CLIENT_ID" }
 if (-not $cSec) {
     $cSec = Read-Host "KROGER_CLIENT_SECRET" -AsSecureString | ForEach-Object { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($_)) }
 }
-if (-not $loc) { $loc = Read-Host "KROGER_LOCATION_ID (e.g. 01400513)" }
+if (-not $loc) { $loc = Read-Host "KROGER_LOCATION_ID (e.g. YOUR_STORE_LOCATION_ID)" }
+
+if (-not $internalSecret) {
+    $internalSecret = Read-Host "INTERNAL_SIDECAR_SECRET (must match GCP INTERNAL_SIDECAR_SECRET used by cravecart-web)"
+}
 
 Write-Host "Publishing secrets on Fly..."
 flyctl secrets set `
@@ -167,6 +179,7 @@ flyctl secrets set `
     "KROGER_CLIENT_SECRET=$cSec" `
     "KROGER_REDIRECT_URI=$KrogerRedirectUri" `
     "KROGER_LOCATION_ID=$loc" `
+    "INTERNAL_SIDECAR_SECRET=$internalSecret" `
     --app $name
 
 Write-Host "`nDeploying..."
