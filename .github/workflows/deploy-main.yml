@@ -57,15 +57,9 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Verify Firebase secrets readable (Secret Manager)
-        env:
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        run: |
-          set -euo pipefail
-          # Use `versions access`, not `secrets describe`: WIF/deploy SAs typically have secretAccessor (access payloads)
-          # without secretmanager.secrets.get (describe). Matches deploy-fly / pin_internal_sidecar expectations.
-          gcloud secrets versions access latest --secret=FIREBASE_WEB_API_KEY --project="${GCP_PROJECT_ID}" >/dev/null
-          gcloud secrets versions access latest --secret=FIREBASE_SERVICE_ACCOUNT_JSON --project="${GCP_PROJECT_ID}" >/dev/null
+      # Do not pre-read Firebase secrets here: the GitHub WIF SA often has Secret Accessor only on secrets the
+      # workflow pins (e.g. INTERNAL_SIDECAR_SECRET). Cloud Build + Cloud Run bind FIREBASE_* from Secret Manager
+      # with their own SAs — missing secrets or IAM shows up in the deploy step with a clear error.
 
       # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
       # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
