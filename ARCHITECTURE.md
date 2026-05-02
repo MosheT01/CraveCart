@@ -2,6 +2,8 @@
 
 CraveCart is a chat-first grocery agent that sits between a browser UI, Gemini, YouTube context, and Kroger cart APIs. The system is intentionally small, but it is not a monolith: the web app is the agent host, while YouTube and Kroger each live behind their own MCP boundary.
 
+**Identity and saved chat:** the browser signs in with **Firebase Authentication** (email/password). The Next server exchanges the Firebase ID token for an **HTTP-only session cookie** (Firebase Admin). **Chat session metadata and messages** for signed-in users live in **Cloud Firestore** (`cravecart_user_chats`), written only through server routes; Firestore security rules deny direct client access. That is separate from **Kroger** OAuth state, which still uses the opaque `cravecart_session` cookie and file-backed storage in `kroger-mcp`.
+
 This document explains the repo as it actually exists today: service boundaries, runtime flow, state model, auth, tool orchestration, and the current tradeoffs that matter if you are extending or operating it.
 
 ## 1. System Overview
@@ -16,7 +18,7 @@ At a high level, the product promise is:
 There are three runtime services:
 
 - `web`: Next.js App Router app and Gemini agent host
-- `youtube-mcp`: Python MCP server for video search and transcript retrieval
+- `youtube-mcp`: Python MCP server for video search, transcript probing, and native-caption retrieval
 - `kroger-mcp`: Python MCP server for Kroger search, OAuth session state, and cart writes
 
 The browser only talks to `web`. `web` is the only public application surface the user needs. The MCP services are backend-only dependencies.
@@ -26,11 +28,21 @@ The browser only talks to `web`. `web` is the only public application surface th
 These are the repo areas that matter most:
 
 - `app/`
-  - Next.js routes, layout, frontend page, browser auth routes
+  - Next.js routes, layout, frontend page; Firebase sign-in UX; Kroger OAuth routes
 - `components/`
-  - chat UI, markdown rendering, tool activity, video/cart cards
+  - chat UI (`LoginScreen` for Firebase auth), markdown rendering, tool activity, video/cart cards
 - `lib/agent/`
-  - Gemini loop, intent detection, MCP client wiring, session memory, tool runtime
+  - Gemini loop, intent detection, MCP client wiring, in-memory session memory, tool runtime
+- `lib/firebase/`
+  - browser Firebase config fetch + session cookie `POST` helper (`clientAuth.ts`)
+- `lib/server/firebase/`
+  - Firebase Admin initialization (service account JSON or file path from env)
+- `lib/server/auth/`
+  - session user resolution (`getSessionUser`), Firebase session cookie helpers
+- `lib/server/chatFirestore.ts`, `lib/server/chatTypes.ts`
+  - Firestore-backed chat persistence per Firebase `uid`
+- `firebase.json`, `firestore.rules`, `.firebaserc`
+  - Firestore rules deployment (Admin-only data path today)
 - `lib/kroger/`
   - Kroger-facing helpers used by the web host
 - `lib/llm/`
@@ -61,11 +73,13 @@ Key entry files:
 ```mermaid
 flowchart LR
     U["User Browser"] --> W["web (Next.js + Gemini host)"]
+    W --> FB["Firebase Auth + Firestore"]
     W --> G["Gemini API"]
     W --> YM["youtube-mcp"]
     W --> KM["kroger-mcp"]
     YM --> Y["YouTube Data API"]
-    YM --> T["Public caption / transcript access"]
+    YM --> S["Supadata Transcript API (native only)"]
+    YM --> T["Direct transcript probe / fallback"]
     KM --> K["Kroger APIs"]
 ```
 
@@ -84,28 +98,37 @@ Primary files:
 
 - [app/page.tsx](app/page.tsx)
 - [app/api/chat/route.ts](app/api/chat/route.ts)
+- [app/api/chat-sessions/route.ts](app/api/chat-sessions/route.ts)
+- [app/api/chat-sessions/[sessionId]/route.ts](app/api/chat-sessions/[sessionId]/route.ts)
 - [app/api/crave/route.ts](app/api/crave/route.ts)
 - [app/api/health/route.ts](app/api/health/route.ts)
+- [app/api/firebase-public-config/route.ts](app/api/firebase-public-config/route.ts)
+- [app/api/auth/session/route.ts](app/api/auth/session/route.ts)
+- [app/api/auth/me/route.ts](app/api/auth/me/route.ts)
+- [app/api/auth/logout/route.ts](app/api/auth/logout/route.ts)
 - [app/api/kroger/auth/start/route.ts](app/api/kroger/auth/start/route.ts)
 - [app/auth/kroger/page.tsx](app/auth/kroger/page.tsx)
 - [app/auth/kroger/callback/route.ts](app/auth/kroger/callback/route.ts)
+- [app/auth/reset-password/page.tsx](app/auth/reset-password/page.tsx)
 
 The web app is responsible for:
 
-- rendering the chat experience
+- rendering the chat experience (sign-in required for chat and chat-session APIs)
 - streaming agent output to the browser over SSE
 - holding the Gemini orchestration loop
 - deciding which MCP tools are exposed to Gemini
-- maintaining lightweight session memory for conversational carry-over
+- maintaining **in-process** session memory for conversational carry-over (`sessionState.ts`)
+- persisting **per-user chat history** to Firestore for signed-in users
 - enforcing cart mutation policy
 - exposing the browser-facing OAuth start and callback flow for Kroger
+- Firebase sign-in/sign-up/forgot-password UX and server session cookie issuance
 - adapting the old one-shot `POST /api/crave` contract onto the new agent runtime
 
 The web app is not responsible for:
 
 - direct YouTube API calls
 - direct Kroger product or cart API calls in the active path
-- durable multi-instance session persistence
+- **shared multi-instance agent carry-over** without extra infrastructure (today’s `sessionState` is still a process-local `Map`; see §7 and deployment notes)
 
 ### 4.2 `youtube-mcp`
 
@@ -118,13 +141,16 @@ This service handles:
 - YouTube search normalization
 - video candidate scoring
 - transcript probing
-- transcript retrieval
+- native transcript retrieval for the selected video
+- honest transcript status mapping (`available`, `unavailable`, `blocked`, `error`)
 - metadata packaging into MCP tool responses
 
 Important design choice:
 
 - CraveCart does not transcribe audio itself
-- it only uses public transcript access when available
+- it only uses existing captions; it does not ask Supadata to generate AI transcripts
+- it keeps search-time transcript probing cheap and local so every candidate does not consume transcript-provider credits
+- it prefers Supadata for the final selected-video fetch because direct transcript scraping is often blocked from server or cloud IPs
 - if none of the first five likely candidates expose a transcript, the system falls back to the most relevant candidate and later infers from title + description
 
 ### 4.3 `kroger-mcp`
@@ -141,7 +167,6 @@ This service handles:
 - product search for a fixed configured store
 - batched add-to-cart requests implemented internally as item-by-item writes
 - last cart summary persistence
-- mock mode for local/demo continuity
 
 It exposes both:
 
@@ -153,6 +178,7 @@ It exposes both:
 Primary UI files:
 
 - [app/page.tsx](app/page.tsx)
+- [components/LoginScreen.tsx](components/LoginScreen.tsx) (Firebase email/password; exchanges ID token for server session)
 - [components/ChatInput.tsx](components/ChatInput.tsx)
 - [components/ChatMarkdown.tsx](components/ChatMarkdown.tsx)
 - [components/AgentActivityPanel.tsx](components/AgentActivityPanel.tsx)
@@ -202,10 +228,11 @@ Input:
 Behavior:
 
 1. parse the payload
-2. ensure a session cookie exists
-3. create an SSE stream
-4. call `runAgentTurn(...)`
-5. stream agent events until completion
+2. require a **Firebase-signed-in user** (`getSessionUser`); otherwise **401**
+3. ensure the **Kroger** `cravecart_session` cookie exists (`ensureSessionId`) for MCP session affinity
+4. create an SSE stream
+5. call `runAgentTurn(...)`
+6. stream agent events until completion
 
 Events emitted:
 
@@ -244,30 +271,67 @@ It checks:
 - Gemini key present
 - YouTube key present
 - YouTube MCP `/health`
+- whether `youtube-mcp` reports `supadataConfigured`
 - Kroger MCP `/health`
-- whether Kroger is in mock mode
+- whether Kroger API credentials are present in the web service env
+- whether **Firebase Admin** is configured (`firebaseConfigured`)
 
-## 7. Session Model
+### 6.4 Firebase identity, server session, and chat APIs
 
-CraveCart has two distinct kinds of state:
+Files:
 
-1. conversational carry-over state in the web app
-2. Kroger auth/cart state in the Kroger service
+- [app/api/firebase-public-config/route.ts](app/api/firebase-public-config/route.ts) — **GET**; returns non-secret web SDK fields (`apiKey`, `projectId`, `authDomain`) when Admin + `FIREBASE_WEB_API_KEY` are configured
+- [app/api/auth/session/route.ts](app/api/auth/session/route.ts) — **POST** `{ idToken }`; verifies token with Admin, sets HTTP-only **`cravecart_fb_session`** session cookie
+- [app/api/auth/me/route.ts](app/api/auth/me/route.ts) — **GET**; returns `{ user }` from the session cookie (id, email, display name)
+- [app/api/auth/logout/route.ts](app/api/auth/logout/route.ts) — **POST**; clears the Firebase session cookie
+- [app/api/chat-sessions/route.ts](app/api/chat-sessions/route.ts) — **GET** list / **POST** bulk import; requires signed-in user; backs onto Firestore
+- [app/api/chat-sessions/[sessionId]/route.ts](app/api/chat-sessions/[sessionId]/route.ts) — per-session reads/writes
+- [lib/server/auth/firebaseSessionCookie.ts](lib/server/auth/firebaseSessionCookie.ts), [lib/server/firebase/admin.ts](lib/server/firebase/admin.ts)
 
-### 7.1 Browser Cookie
+Flow:
+
+1. Browser loads config from `/api/firebase-public-config` and uses the Firebase JS SDK for email/password.
+2. After `signInWithEmailAndPassword` (or sign-up + `updateProfile` for display name), the client posts the fresh ID token to `/api/auth/session`.
+3. Chat and chat-session routes call [getSessionUser](lib/server/auth/getSessionUser.ts); unauthenticated requests get **401**.
+
+Firestore rules ([firestore.rules](firestore.rules)) currently deny all direct client reads/writes; the server uses the Admin SDK only.
+
+## 7. Session and persistence model
+
+CraveCart combines **four** related ideas—do not conflate them:
+
+| Layer | Mechanism | Purpose |
+| ----- | --------- | ------- |
+| **Signed-in user** | HTTP-only **`cravecart_fb_session`** (Firebase session cookie) | Who is using the app; gates `/api/chat` and `/api/chat-sessions/*` |
+| **Chat history** | Firestore docs under **`cravecart_user_chats`** | Durable sidebar sessions + messages per Firebase `uid` |
+| **Kroger browser session** | **`cravecart_session`** cookie ([lib/kroger/session.ts](lib/kroger/session.ts)) | Opaque id shared with `kroger-mcp` for OAuth + cart token storage |
+| **Agent carry-over** | In-memory `Map` ([lib/agent/sessionState.ts](lib/agent/sessionState.ts)) | Short-lived tool/recipe/cart context for the model between turns (keyed by `cravecart_session` id) |
+
+### 7.1 Firebase user session
+
+- Issued only after Admin verifies the client ID token.
+- Cookie options: `httpOnly`, `sameSite: lax`, `secure` in production.
+- User display name comes from Firebase Auth **`displayName`** (sign-up collects first + last in the UI, stored as a single display name string).
+
+### 7.2 Firestore chat persistence
+
+- Implementation: [lib/server/chatFirestore.ts](lib/server/chatFirestore.ts), types in [lib/server/chatTypes.ts](lib/server/chatTypes.ts).
+- The UI may still keep **localStorage** copies for migration or offline UX; the server source of truth for signed-in users is Firestore.
+
+### 7.3 Kroger `cravecart_session` cookie
 
 File:
 
 - [lib/kroger/session.ts](lib/kroger/session.ts)
 
-The web app ensures an opaque `cravecart_session` cookie exists. That cookie is the shared session key across services.
+The web app ensures an opaque `cravecart_session` cookie exists. That value is the shared key into **Kroger MCP** session files—not the Firebase user id.
 
 The cookie is used for:
 
-- lookup of in-memory agent session state in `web`
+- lookup of in-memory agent session state in `web` (via `sessionState`)
 - lookup of JSON-backed Kroger OAuth state in `kroger-mcp`
 
-### 7.2 Web Agent Memory
+### 7.4 Web agent memory (in-process)
 
 File:
 
@@ -293,11 +357,11 @@ TTL:
 
 Implication:
 
-- this is fine for one-instance operation
-- it is not a multi-instance or horizontally scaled design
-- a process restart drops conversation memory
+- this is fine for **single-instance** `web` or low concurrency
+- **horizontal scale** of `web` without sticky sessions or a shared store breaks carry-over for the same browser (Firestore chat still loads; mid-conversation tool context may not)
+- a process restart drops this layer (Firestore chat survives)
 
-### 7.3 Kroger Session Storage
+### 7.5 Kroger MCP session storage (file-backed)
 
 File:
 
@@ -315,7 +379,7 @@ The Kroger service stores one JSON file per session under its `data/sessions` di
 Implication:
 
 - real cart auth survives restarts if the volume persists
-- this is still an MVP persistence layer, not a shared production auth store
+- this is still an MVP persistence layer for **Kroger tokens**, not Firebase identity
 
 ## 8. Agent Runtime
 
@@ -526,14 +590,25 @@ CraveCart does not generate transcripts itself.
 
 It relies on:
 
-- `youtube-transcript-api`
-- public subtitle access for manual or auto-generated English captions
+- `youtube-transcript-api` for low-cost transcript probing during candidate ranking
+- Supadata `/v1/transcript` with `mode=native` for selected-video retrieval
+- direct public subtitle access only as a last-resort fallback when Supadata has a transient provider failure
 
-If transcript retrieval works:
+The selected-video fetch flow is:
 
-- the transcript is cleaned and returned
+1. try Supadata in `mode=native`
+2. if Supadata returns a transcript directly, clean it and return it
+3. if Supadata returns an async job, poll until it completes or fails
+4. if Supadata says the transcript is unavailable, report that honestly and stop
+5. if Supadata transiently fails or rate-limits, try direct `youtube-transcript-api`
+6. if both paths fail, return an honest `blocked` or `error` status instead of claiming there is no transcript
 
-If it fails:
+Important constraint:
+
+- CraveCart does not call Supadata `mode=auto` or `mode=generate`
+- if YouTube already has captions, the app should use the native caption track rather than an AI-regenerated transcript
+
+If transcript retrieval still fails:
 
 - the selected video is still returned
 - the downstream system may use title + description inference
@@ -545,6 +620,7 @@ If it fails:
 
 - video metadata
 - transcript availability
+- transcript status (`available`, `unavailable`, `blocked`, `error`)
 - transcript text when available
 - transcript message when unavailable
 
@@ -676,7 +752,7 @@ That lets the app:
 Cart writes require:
 
 - explicit buy intent in the latest user turn
-- a connected Kroger session unless mock mode is on
+- a connected Kroger session
 
 The add-to-cart tool accepts a batch, but `kroger-mcp` writes each item one by one with `PUT /cart/add`. This lets the app:
 
@@ -714,30 +790,9 @@ Important properties:
 - browser and backend state are stitched together by `cravecart_session`
 - redirect URI must match the Kroger app configuration exactly
 
-## 19. Mock Mode
+## 19. Kroger integration
 
-Primary files:
-
-- [lib/env.ts](lib/env.ts)
-- [kroger-mcp/app.py](kroger-mcp/app.py)
-
-Mock mode turns on when:
-
-- `KROGER_MOCK_MODE=true`
-- or Kroger credentials are missing
-
-Mock mode behavior:
-
-- auth status always returns authenticated
-- product search resolves against a local mock catalog
-- add-to-cart succeeds synthetically
-- the MCP surface stays the same as live mode
-
-This is important because it means:
-
-- the agent path is consistent
-- local demos do not require live auth
-- the web app does not fork its core logic for mock vs real
+Kroger product search and cart writes always use the live Kroger API. Configure `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET`, `KROGER_REDIRECT_URI`, and `KROGER_LOCATION_ID` in every environment (local, compose, Cloud Run).
 
 ## 20. Compatibility Wrapper
 
@@ -795,9 +850,10 @@ This matters because:
 Primary files:
 
 - [docker-compose.yml](docker-compose.yml)
-- [Dockerfile](Dockerfile)
+- [Dockerfile](Dockerfile) (Next **standalone**; runtime **`USER nextjs`**)
 - [youtube-mcp/Dockerfile](youtube-mcp/Dockerfile)
 - [kroger-mcp/Dockerfile](kroger-mcp/Dockerfile)
+- [cloudbuild.yaml](cloudbuild.yaml), [docs/deploy-cloud-run.md](docs/deploy-cloud-run.md)
 
 Recommended baseline deployment:
 
@@ -805,36 +861,51 @@ Recommended baseline deployment:
 - one `youtube-mcp`
 - one `kroger-mcp`
 - one persistent volume for Kroger session data
+- Firebase project with **Authentication** (email/password), **Firestore**, and Admin credentials mounted as **`FIREBASE_SERVICE_ACCOUNT_JSON`** (Cloud Run) or **`FIREBASE_SERVICE_ACCOUNT_PATH`** / Compose host mount (see [README](./README.md))
+
+Compose note: **`FIREBASE_SERVICE_ACCOUNT_HOST_PATH`** binds the Admin JSON into `/secrets/firebase-sa.json` inside `web`; production typically uses Secret Manager instead.
 
 This repo is well-suited to:
 
 - local development
 - demo environments
-- a single-instance hosted beta
+- a single-instance hosted beta (simplest correctness story for agent carry-over)
+
+Firestore-backed **accounts and chat** can scale across multiple `web` instances once requests can reach any instance; **`sessionState` (agent carry-over)** is still **per-process** unless you externalize it (Redis/Firestore/affinity).
 
 It is not yet well-suited to:
 
-- stateless multi-instance web scaling
-- stateless multi-instance Kroger service scaling
-- public multi-tenant auth persistence without additional infra
+- **horizontally scaled `web`** with **sticky tool carry-over** and no shared store for `sessionState`
+- stateless multi-instance Kroger **MCP** scaling without moving session files to shared storage
+
+Firebase provides **hosted multi-user identity**; remaining scale limits are agent memory + Kroger file sessions, not Firebase login.
 
 ## 24. Environment Contract
 
-Primary file:
+Primary files:
 
 - [lib/env.ts](lib/env.ts)
+- [.env.example](.env.example) (authoritative list for local/Compose)
 
 Important envs:
 
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL`
 - `YOUTUBE_API_KEY`
+- `SUPADATA_API_KEY` — recommended; mounted into `youtube-mcp` for native public-caption retrieval
 - `KROGER_CLIENT_ID`
 - `KROGER_CLIENT_SECRET`
 - `KROGER_REDIRECT_URI`
 - `KROGER_LOCATION_ID`
-- `KROGER_MOCK_MODE`
 - `APP_BASE_URL`
+- `INTERNAL_SIDECAR_SECRET` — required when MCP sidecars enforce bearer/auth between services (matches GCP Secret **`INTERNAL_SIDECAR_SECRET`** in Cloud Run flows)
+
+Firebase (required for prod parity auth + chat persistence):
+
+- `FIREBASE_WEB_API_KEY`
+- **`FIREBASE_SERVICE_ACCOUNT_JSON`** OR **`FIREBASE_SERVICE_ACCOUNT_PATH`** (Admin SDK JSON)
+- Compose-only host bind: **`FIREBASE_SERVICE_ACCOUNT_HOST_PATH`** (see [docker-compose.yml](docker-compose.yml))
+- Optional: `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_DOMAIN` when not inferred or when Auth domain differs from `{projectId}.firebaseapp.com`
 
 Optional service overrides:
 
@@ -861,7 +932,7 @@ The current suite focuses on the places where agentic systems usually break:
 - deterministic product ranking
 - quantity estimation
 - UI activity trace normalization
-- mock/cart behavior
+- Kroger MCP auth and cart aggregation smoke tests
 
 This is an important pattern in the repo:
 
@@ -875,11 +946,11 @@ This repo is deliberately pragmatic. The main compromises are:
 
 - transcript retrieval is best-effort
 - title/description inference can be imperfect when transcripts are missing
-- session memory in the web app is in-memory only
-- Kroger session storage is file-backed
+- **tool carry-over** (`sessionState`) is **in-memory per `web` process** (Firestore chat survives restarts and scales separately)
+- Kroger session storage for OAuth tokens is **file-backed** in `kroger-mcp`
 - cart mutation support is add-only in the live path
 - quantity estimation is heuristic
-- there is no user account system inside CraveCart itself
+- Firebase stores **identity + display name + chat docs**; there is **no bespoke user table** beyond Firebase/Firestore
 
 Those are acceptable for the current product stage because the architecture is optimizing for:
 
@@ -887,6 +958,7 @@ Those are acceptable for the current product stage because the architecture is o
 - real tool boundaries
 - live cart usefulness
 - simple deployment
+- credible sign-in without operating a passwords database yourself
 
 ## 27. Extension Points
 
@@ -914,18 +986,21 @@ If you want to extend the system, these are the cleanest seams:
 
 ### Replace MVP persistence
 
-- [lib/agent/sessionState.ts](lib/agent/sessionState.ts)
-- [kroger-mcp/app.py](kroger-mcp/app.py)
+- [lib/agent/sessionState.ts](lib/agent/sessionState.ts) — Redis/Memorystore/Firestore keyed by `cravecart_session` id for multi-instance `web`
+- [kroger-mcp/app.py](kroger-mcp/app.py) — shared object store or volume instead of local `data/sessions`
+- [lib/server/chatFirestore.ts](lib/server/chatFirestore.ts) — tighten rules/indexes if you open client-direct reads later
 
 ## 28. Mental Model For Contributors
 
 If you are new to the repo, the correct mental model is:
 
-- `page.tsx` is the chat shell
-- `/api/chat` is the streamed execution gateway
+- `page.tsx` is the chat shell; **Firebase sign-in** gates chat
+- `/api/firebase-public-config` + `/api/auth/session` establish the server-side user session cookie
+- `/api/chat-sessions*` mirror chat to **Firestore** for signed-in users
+- `/api/chat` is the streamed execution gateway (**401** until signed in)
 - `runAgentTurn.ts` is the agent brainstem
 - `toolRuntime.ts` is the deterministic orchestration core
 - `youtube-mcp` is the video/transcript provider
-- `kroger-mcp` is the store/cart provider
+- `kroger-mcp` is the store/cart provider (still keyed by `cravecart_session`)
 
 Gemini decides what to do next. The runtime decides what Gemini is allowed to do, how tool results are persisted, and how the product keeps working when the world is messy.

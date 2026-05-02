@@ -1,0 +1,120 @@
+name: Deploy main → GCP Cloud Run + Fly
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+# Sensitive deploy inputs use Actions *secrets* (shown as *** in logs), not *variables*,
+# which are echoed plainly in workflow expansion. Local fly.toml slug may still be visible in-repo.
+# See docs/deploy-cloud-run.md → migration from Variables → Secrets.
+
+jobs:
+  deploy-gcp-then-fly:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDSDK_VERBOSITY: error
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate CI configuration
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          KROGER_LOCATION_ID: ${{ secrets.KROGER_LOCATION_ID }}
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${GCP_PROJECT_ID:-}" || { echo "Missing Actions secret GCP_PROJECT_ID." >&2; exit 1; }
+          test -n "${KROGER_LOCATION_ID:-}" || { echo "Missing Actions secret KROGER_LOCATION_ID." >&2; exit 1; }
+          test -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" || { echo "Missing Actions secret EXTERNAL_KROGER_SIDECAR_URL." >&2; exit 1; }
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: ${{ vars.GCP_USE_WIF == 'true' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud (service account key)
+        if: ${{ vars.GCP_USE_WIF != 'true' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Do not pre-read Firebase secrets here: the GitHub WIF SA often has Secret Accessor only on secrets the
+      # workflow pins (e.g. INTERNAL_SIDECAR_SECRET). Cloud Build + Cloud Run bind FIREBASE_* from Secret Manager
+      # with their own SAs — missing secrets or IAM shows up in the deploy step with a clear error.
+
+      # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
+      # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
+      # Uses REST access:latest (secretmanager.versions.access only) — unlike `describe`/`versions list`,
+      # WIF principals with secrets/secretAccessor-only IAM still work.
+      - name: Pin INTERNAL_SIDECAR_SECRET version (Cloud Run + Fly)
+        id: sidecar_secret_version
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          VID="$(python3 scripts/ci/pin_internal_sidecar_secret_version.py "${GCP_PROJECT_ID}")"
+          echo "Pinned INTERNAL_SIDECAR_SECRET to one Secret Manager revision for this workflow (id not logged)."
+          echo "version=${VID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Submit Cloud Build (web + youtube MCP + Artifact Registry images)
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          KROGER_LOCATION_ID: ${{ secrets.KROGER_LOCATION_ID }}
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
+          KROGER_API_HOST: ${{ secrets.KROGER_API_HOST }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          SUBS="_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${KROGER_LOCATION_ID},_EXTERNAL_KROGER_SIDECAR_URL=${EXTERNAL_KROGER_SIDECAR_URL},_INTERNAL_SIDECAR_SECRET_VERSION=${{ steps.sidecar_secret_version.outputs.version }}"
+          if [[ -n "${KROGER_API_HOST:-}" ]]; then
+            SUBS="${SUBS},_KROGER_API_HOST=${KROGER_API_HOST}"
+          fi
+          if [[ -n "${FIREBASE_AUTH_DOMAIN:-}" ]]; then
+            SUBS="${SUBS},_FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN}"
+          fi
+          if [[ -n "${FIREBASE_PROJECT_ID:-}" ]]; then
+            SUBS="${SUBS},_FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}"
+          fi
+          gcloud builds submit \
+            --config=cloudbuild.yaml \
+            --project="${GCP_PROJECT_ID}" \
+            --substitutions="${SUBS}"
+
+      - name: Set up Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Deploy Kroger MCP to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ secrets.FLY_APP_NAME }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: us-central1
+          INTERNAL_SIDECAR_SECRET_VERSION: ${{ steps.sidecar_secret_version.outputs.version }}
+          # Unused for probing /health — deploy-fly-ci.sh uses https://${FLY_APP}.fly.dev — kept for mismatch warnings vs Cloud Build.
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${FLY_API_TOKEN:-}" || { echo "Missing Actions secret FLY_API_TOKEN." >&2; exit 1; }
+          test -n "${FLY_APP:-}" || { echo "Missing Actions secret FLY_APP_NAME (Fly Machines app slug); set it to override fly.toml without logging the slug." >&2; exit 1; }
+          bash kroger-mcp/deploy-fly-ci.sh

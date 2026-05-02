@@ -6,6 +6,19 @@ interface VideoResultCardProps {
 }
 
 export function VideoResultCard({ video }: VideoResultCardProps) {
+  const transcriptLabel =
+    video.transcriptAvailable
+      ? "Transcript available"
+      : video.transcriptStatus === "blocked"
+        ? "Transcript fetch blocked"
+        : video.transcriptStatus === "error"
+          ? "Transcript fetch failed"
+          : "Transcript unavailable"
+  const sourceLabel =
+    video.recipeSource === "none"
+      ? "unknown"
+      : video.recipeSource.replace("_", " ")
+
   return (
     <section className="rounded-[28px] border border-white/12 bg-white/[0.06] px-5 py-4 text-white backdrop-blur-xl">
       <div className="flex items-center gap-2 text-sm uppercase tracking-[0.24em] text-primary/80">
@@ -24,7 +37,7 @@ export function VideoResultCard({ video }: VideoResultCardProps) {
       <p className="mt-1 text-sm text-white/65">{video.video.channel}</p>
       <p className="mt-4 text-sm leading-7 text-white/80">{video.summary}</p>
       <p className="mt-3 text-xs uppercase tracking-[0.2em] text-white/45">
-        {video.transcriptAvailable ? "Transcript available" : "Transcript unavailable"} · source {video.recipeSource.replace("_", " ")}
+        {transcriptLabel} · source {sourceLabel}
       </p>
     </section>
   )

@@ -26,12 +26,29 @@ export function getAppBaseUrl(): string {
   return readEnv("APP_BASE_URL", "http://localhost:3000")
 }
 
+/**
+ * `Secure` session cookies break local Docker Compose: the image sets NODE_ENV=production while APP_BASE_URL is
+ * still http://localhost — browsers refuse Secure cookies on HTTP.
+ */
+export function useSecureSessionCookies(): boolean {
+  if (process.env.NODE_ENV !== "production") return false
+  const base = getAppBaseUrl().trim().toLowerCase()
+  return base.startsWith("https://")
+}
+
+/** Mounted MCP apps use `/mcp/`; without trailing slash Starlette redirects and can downgrade to http behind proxies. */
+function normalizeMountedMcpUrl(envName: string, defaultWithoutSlash: string): string {
+  const raw = readEnv(envName, defaultWithoutSlash).replace(/\/+$/u, "")
+  const withMount = /\/mcp$/i.test(raw) ? raw : `${raw}/mcp`
+  return `${withMount}/`
+}
+
 export function getYouTubeMcpUrl(): string {
-  return readEnv("YOUTUBE_MCP_URL", "http://youtube-mcp:8100/mcp")
+  return normalizeMountedMcpUrl("YOUTUBE_MCP_URL", "http://youtube-mcp:8100/mcp")
 }
 
 export function getYouTubeServiceUrl(): string {
-  return readEnv("YOUTUBE_SERVICE_URL", getYouTubeMcpUrl().replace(/\/mcp\/?$/, ""))
+  return readEnv("YOUTUBE_SERVICE_URL", getYouTubeMcpUrl().replace(/\/mcp\/?$/i, ""))
 }
 
 export function getKrogerServiceUrl(): string {
@@ -39,7 +56,10 @@ export function getKrogerServiceUrl(): string {
 }
 
 export function getKrogerMcpUrl(): string {
-  return readEnv("KROGER_MCP_URL", `${getKrogerServiceUrl().replace(/\/$/, "")}/mcp`)
+  return normalizeMountedMcpUrl(
+    "KROGER_MCP_URL",
+    `${getKrogerServiceUrl().replace(/\/$/, "")}/mcp`,
+  )
 }
 
 export function areKrogerCredentialsConfigured(): boolean {
@@ -51,10 +71,16 @@ export function areKrogerCredentialsConfigured(): boolean {
   )
 }
 
-export function isMockKrogerMode(): boolean {
-  return readBooleanEnv("KROGER_MOCK_MODE", false) || !areKrogerCredentialsConfigured()
-}
-
 export function isYouTubeConfigured(): boolean {
   return Boolean(readEnv("YOUTUBE_API_KEY"))
+}
+
+/** Per-request MCP tools/call timeout (ms); cold starts + YouTube often need more than SDK default (60s). */
+export function getMcpToolTimeoutMs(): number {
+  const raw = readEnv("MCP_TOOL_TIMEOUT_MS", "180000")
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 15000) {
+    return 180000
+  }
+  return parsed
 }

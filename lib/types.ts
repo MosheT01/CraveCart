@@ -8,7 +8,7 @@ export type IngredientCategory =
   | "beverage"
   | "other"
 
-export type RecipeSource = "youtube_transcript" | "fallback_recipe"
+export type RecipeSource = "youtube_transcript" | "fallback_recipe" | "video_metadata"
 
 export type ProgressStepId =
   | "finding_recipe"
@@ -163,6 +163,13 @@ export interface KrogerHealthResponse {
   authenticated?: boolean
 }
 
+/** Per-browser-session OAuth state from kroger-mcp ``GET /session/status``. */
+export interface KrogerSessionOAuthStatus {
+  ok: boolean
+  configured: boolean
+  authenticated: boolean
+}
+
 export interface KrogerAuthStartResponse {
   authUrl: string
 }
@@ -191,6 +198,8 @@ export interface VideoArtifact {
     channel: string
   }
   transcriptAvailable: boolean
+  transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
+  transcriptMessage?: string
   recipeSource: RecipeSource | "none"
   summary: string
 }

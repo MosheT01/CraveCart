@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
+const MAX_CHARS = 1000
+
 interface ChatInputProps {
   onSubmit: (craving: string) => void
   isLoading?: boolean
@@ -24,11 +26,7 @@ export function ChatInput({
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
     const nextValue = value.trim()
-
-    if (!nextValue || isLoading) {
-      return
-    }
-
+    if (!nextValue || isLoading) return
     onSubmit(nextValue)
     setValue("")
   }
@@ -40,10 +38,22 @@ export function ChatInput({
     }
   }
 
+  const charCount = value.length
+  const nearLimit = charCount > MAX_CHARS * 0.8
+  const overLimit = charCount > MAX_CHARS
+
   return (
     <form onSubmit={handleSubmit} className={cn("w-full", className)}>
-      <div className="rounded-[22px] border border-white/12 bg-black/35 p-1 shadow-[0_12px_40px_rgba(0,0,0,0.2)] backdrop-blur-xl">
-        <div className="flex items-end gap-2">
+      <div
+        className={cn(
+          "surface-glass rounded-[22px] border px-1 pb-1 pt-1 transition-all duration-200",
+          "focus-within:shadow-[0_8px_40px_rgba(0,0,0,0.35)]",
+          overLimit
+            ? "border-rose-500/30 focus-within:border-rose-500/50"
+            : "border-white/10 focus-within:border-white/18"
+        )}
+      >
+        <div className="flex items-end gap-2 px-1">
           <Textarea
             value={value}
             onChange={(event) => setValue(event.target.value)}
@@ -51,16 +61,46 @@ export function ChatInput({
             placeholder={placeholder}
             disabled={isLoading}
             rows={1}
-            className="max-h-24 min-h-[44px] flex-1 resize-none border-0 bg-transparent px-3 py-2.5 text-[15px] text-white placeholder:text-white/45 focus-visible:ring-0"
+            maxLength={MAX_CHARS + 100}
+            className="max-h-32 min-h-[44px] flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-[15px] leading-relaxed text-white placeholder:text-white/38 focus-visible:ring-0"
           />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!value.trim() || isLoading}
-            className="h-9 w-9 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/25 transition-transform hover:scale-[1.02] hover:bg-primary/90"
-          >
-            <SendHorizontal className="h-4 w-4" />
-          </Button>
+
+          <div className="flex shrink-0 items-end gap-1.5 pb-1 pr-0.5">
+            {/* Character count — only shown when typing */}
+            {charCount > 0 && (
+              <span
+                className={cn(
+                  "mb-1.5 text-[10px] tabular-nums transition-colors duration-200",
+                  overLimit ? "text-rose-400" : nearLimit ? "text-amber-400/70" : "text-white/22"
+                )}
+              >
+                {charCount}
+              </span>
+            )}
+
+            <Button
+              type="submit"
+              size="icon-lg"
+              variant={value.trim() && !overLimit ? "cinematic" : "secondary"}
+              disabled={!value.trim() || isLoading || overLimit}
+              className={cn(
+                "h-9 w-9 rounded-full shadow-lg transition-all duration-200",
+                "hover:scale-[1.06] active:scale-95",
+                value.trim() && !overLimit
+                  ? "shadow-primary/30 hover:shadow-primary/40"
+                  : "bg-white/8 text-white/30 shadow-none"
+              )}
+            >
+              <SendHorizontal className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Bottom hint */}
+        <div className="px-3 pb-1.5 pt-0">
+          <p className="text-[10px] text-white/18">
+            Press <kbd className="font-mono">Enter</kbd> to send · <kbd className="font-mono">Shift+Enter</kbd> for new line
+          </p>
         </div>
       </div>
     </form>

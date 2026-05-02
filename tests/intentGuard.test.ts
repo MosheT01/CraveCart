@@ -34,6 +34,8 @@ describe("agent intent guard", () => {
   it("detects follow-up turns that should reuse prior recipe context", () => {
     expect(shouldUseCarryoverContext("buy them for me")).toBe(true)
     expect(shouldUseCarryoverContext("did you buy all the ingredients")).toBe(true)
+    expect(shouldUseCarryoverContext("what does the transcript say")).toBe(true)
+    expect(shouldUseCarryoverContext("transcript?")).toBe(true)
     expect(shouldUseCarryoverContext("tell me about a new pizza video")).toBe(false)
   })
 
@@ -57,6 +59,8 @@ describe("agent intent guard", () => {
   it("detects video context follow-ups that should reuse saved context", () => {
     expect(isVideoContextFollowup("how did he make it")).toBe(true)
     expect(isVideoContextFollowup("what ingredients were in it")).toBe(true)
+    expect(isVideoContextFollowup("what does the transcript say")).toBe(true)
+    expect(isVideoContextFollowup("transcript?")).toBe(true)
     expect(isVideoContextFollowup("search for another taco video")).toBe(false)
   })
 

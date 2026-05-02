@@ -1,20 +1,25 @@
 import { KrogerAuthClient } from "@/components/KrogerAuthClient"
 
-export default function KrogerAuthPage({
+type KrogerAuthSearchParams = {
+  status?: string
+  message?: string
+}
+
+export default async function KrogerAuthPage({
   searchParams,
 }: {
-  searchParams?: {
-    status?: string
-    message?: string
-  }
+  /** Next.js 15+ may pass a Promise; support both. */
+  searchParams?: Promise<KrogerAuthSearchParams> | KrogerAuthSearchParams
 }) {
+  const sp = (await Promise.resolve(searchParams)) ?? {}
+
   const initialState =
-    searchParams?.status === "connected"
+    sp.status === "connected"
       ? { mode: "connected" as const }
-      : searchParams?.status === "error"
+      : sp.status === "error"
         ? {
             mode: "error" as const,
-            message: searchParams.message ?? "Kroger authorization failed.",
+            message: sp.message ?? "Kroger authorization failed.",
           }
         : { mode: "loading" as const }
 

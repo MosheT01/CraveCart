@@ -9,4 +9,15 @@ kroger-mcp/data
 youtube-mcp/data
 kroger-mcp/.venv
 youtube-mcp/.venv
+.git
+.gitignore
 .env
+.env.*
+!.env.example
+*.md
+.vscode
+.idea
+terminals
+mcps
+**/*.test.ts
+**/vitest.config.*

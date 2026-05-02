@@ -37,6 +37,10 @@ const CARRYOVER_CONTEXT_PATTERNS = [
   /\bhow do i make it\b/i,
   /\bwhat('?s| is)\s+in\s+it\b/i,
   /\bwhat ingredients\b/i,
+  /^\s*transcript\??\s*$/i,
+  /\bwhat does\b.{0,24}\btranscript\b.{0,24}\bsay\b/i,
+  /\bwhat('?s| is)\s+the\s+transcript\b/i,
+  /\bshow\b.{0,12}\b(transcript|captions?|cc)\b/i,
 ]
 const CART_STATUS_PATTERNS = [
   /\bdid you\b.{0,24}\b(buy|add|get)\b.{0,24}\ball\b.{0,24}\bingredients\b/i,
@@ -52,6 +56,11 @@ const VIDEO_CONTEXT_FOLLOWUP_PATTERNS = [
   /\bwhat ingredients\b/i,
   /\btell me more\b.{0,20}\b(video|recipe|it)\b/i,
   /\bhow does\b.{0,20}\bit\b.{0,20}\bwork\b/i,
+  /^\s*transcript\??\s*$/i,
+  /\bwhat does\b.{0,24}\btranscript\b.{0,24}\bsay\b/i,
+  /\bwhat('?s| is)\s+the\s+transcript\b/i,
+  /\bshow\b.{0,12}\b(transcript|captions?|cc)\b/i,
+  /\bdoes\b.{0,16}\bit\b.{0,16}\bhave\b.{0,16}\b(transcript|captions?|cc)\b/i,
 ]
 
 export function getLatestUserMessage(messages: ChatMessage[]): string {
