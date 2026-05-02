@@ -2,8 +2,8 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { getSessionUser } from "@/lib/server/auth/getSessionUser"
-import { getSessionMessages, upsertSessionBundle } from "@/lib/server/chatHistoryStore"
-import type { StoredChatMessage } from "@/lib/server/chatHistoryStore"
+import type { StoredChatMessage } from "@/lib/server/chatTypes"
+import { getSessionMessages, upsertSessionBundle } from "@/lib/server/chatFirestore"
 
 export const runtime = "nodejs"
 

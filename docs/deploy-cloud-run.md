@@ -34,6 +34,10 @@ Empty **`INTERNAL_SIDECAR_SECRET`** on **`cravecart-web`** triggers an explicit 
 
 Do **not** use `-UseParentEnv` for production Fly deployments; it reads `.env`, which often holds dev-only Kroger apps and mismatches Kroger Developer redirect URIs.
 
+### Local Docker Compose + Firebase
+
+For **`docker compose`**, set **`FIREBASE_SERVICE_ACCOUNT_HOST_PATH`** in repo-root **`.env`** to the absolute path of your Admin SDK JSON on the host. Compose mounts it read-only at **`/secrets/firebase-sa.json`** inside **`web`** and sets **`FIREBASE_SERVICE_ACCOUNT_PATH`** there—you do **not** need **`FIREBASE_SERVICE_ACCOUNT_JSON`** in the container env for local Compose. For **`pnpm dev`** / **`npm run dev`** on your machine, **`FIREBASE_SERVICE_ACCOUNT_PATH`** should point at that same JSON file. **Cloud Run** still uses **`FIREBASE_SERVICE_ACCOUNT_JSON`** from Secret Manager as a single blob (see **`cloudbuild.yaml`**).
+
 ## Architecture
 
 | Service              | Cloud Run name              | Port | Purpose                          |
@@ -76,8 +80,10 @@ Register **exactly** that redirect URI in the Kroger developer console.
    | `KROGER_CLIENT_ID`          | web (+ `cravecart-kroger-mcp` if that service exists) |
    | `KROGER_CLIENT_SECRET`      | web (+ `cravecart-kroger-mcp` if that service exists) |
    | `INTERNAL_SIDECAR_SECRET`   | **`cravecart-web`** (outbound auth) + **Fly Kroger MCP** (bearer gate). Create once, e.g. `openssl rand -base64 32 \| gcloud secrets create INTERNAL_SIDECAR_SECRET --data-file=-` |
+   | `FIREBASE_SERVICE_ACCOUNT_JSON` | **`cravecart-web`** — full Firebase Admin service account JSON (one blob) |
+   | `FIREBASE_WEB_API_KEY`      | **`cravecart-web`** — Firebase Web API key (restrict domains in Firebase console) |
 
-   Grant the Cloud Run **runtime** service account **`roles/secretmanager.secretAccessor`** on `INTERNAL_SIDECAR_SECRET`.
+   Grant the Cloud Run **runtime** service account **`roles/secretmanager.secretAccessor`** on each secret referenced in `cloudbuild.yaml`.
 
    Example:
 
@@ -90,11 +96,15 @@ Register **exactly** that redirect URI in the Kroger developer console.
    - Cloud Build default service account (`PROJECT_NUMBER@cloudbuild.gserviceaccount.com`): grant **Cloud Run Admin**, **Artifact Registry Writer**, and **Service Account User** on the Cloud Run **runtime** service account (default is the project’s compute service account).
    - Cloud Run runtime service account: grant **Secret Manager Secret Accessor** on each secret used in deploy flags.
 
+### Cost note
+
+Deploys use **`min-instances: 0`** on Cloud Run. Add a **[billing budget alert](https://console.cloud.google.com/billing)**.
+
 ## Deploy with Cloud Build
 
 Align `_AR_HOSTNAME` with where you deploy Cloud Run (e.g. `us-central1` → `us-central1-docker.pkg.dev`). Bash deploy steps pin `us-central1`; change [`cloudbuild.yaml`](../cloudbuild.yaml) if you use another region.
 
-Set `_KROGER_LOCATION_ID` to your Kroger store location (required for product search). Ensure **API + `INTERNAL_SIDECAR_SECRET`** exist in Secret Manager (see table above).
+Set `_KROGER_LOCATION_ID` to your Kroger store location (required for product search). Ensure **API keys + `INTERNAL_SIDECAR_SECRET` + Firebase secrets** exist in Secret Manager (see table above).
 
 Hybrid Kroger MCP on Fly requires **`_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev`** on each **`gcloud builds submit`** (no production hostname checked into the repo defaults).
 
@@ -166,7 +176,8 @@ Map a domain to `cravecart-web` in Cloud Run, then update env:
 ## Local verification after infra changes
 
 - `pnpm install && pnpm build` (or Docker `docker compose build web && docker compose up`).
-- Open `/api/health` and confirm sidecars respond when URLs in `.env` match your local or compose network.
+- Open `/api/health` and confirm sidecars respond when URLs in `.env` match your local or compose network, and **`firebaseConfigured`** is `true` when Firebase env + Admin credentials are loaded.
+- Firestore rules: from repo root, `firebase deploy --only firestore:rules` (after `firebase login`), using [`.firebaserc`](../.firebaserc) / [firebase.json](../firebase.json).
 
 ## Observability
 
@@ -176,12 +187,16 @@ Map a domain to `cravecart-web` in Cloud Run, then update env:
 
 ## Scaling follow-up (when `max-instances` must exceed 1 on web)
 
-Today, [lib/agent/sessionState.ts](../lib/agent/sessionState.ts) keeps agent tool carry-over in a **process-local `Map`**. Plans for horizontal scale:
+Signed-in users, **Firebase session verification**, and **Firestore chat persistence** (`lib/server/chatFirestore.ts`) do not inherently require `max-instances: 1`.
 
-1. **Web**: Introduce a small adapter backed by **Memorystore (Redis)** or **Firestore** keyed by `cravecart_session` cookie id; replace get/set in `sessionState.ts` with async I/O while keeping the same shapes.
-2. **Kroger MCP**: Session JSON under `data/sessions` is on **ephemeral** disk on Cloud Run. Options: **Cloud Run volume** (where available), **GCS** with per-session objects, or **Firestore**; keep the same file-like API in `kroger-mcp/app.py` behind a storage abstraction.
+The remaining bottleneck is **in-process agent carry-over**: [lib/agent/sessionState.ts](../lib/agent/sessionState.ts) keeps tool/recipe context in a **process-local `Map`** keyed by the opaque Kroger **`cravecart_session`** cookie. With multiple `web` instances and no session affinity, a user’s next SSE turn may hit a different replica and lose that map entry (Firestore chat reloads correctly; mid-thread tool state may not).
 
-Until then, keep **`max-instances: 1`** on `cravecart-web` for correct multi-user isolation of agent state under load.
+Plans for horizontal scale:
+
+1. **Web**: Introduce **Memorystore (Redis)** or **Firestore** keyed by `cravecart_session` cookie id for `sessionState.ts`, **or** enable **session affinity** on Cloud Run **or** accept `max-instances: 1` until migrated.
+2. **Kroger MCP**: Session JSON under `data/sessions` is on **ephemeral** disk on Cloud Run. Options: **Cloud Run volume** (where available), **GCS** with per-session objects, or **Firestore**; wrap `kroger-mcp/app.py` storage behind an abstraction.
+
+Default conservative choice until (1): keep **`max-instances: 1`** on **`cravecart-web`** when users rely heavily on carry-over flows under load.
 
 ## Troubleshooting
 
@@ -282,6 +297,8 @@ The workflow [`.github/workflows/deploy-main.yml`](../.github/workflows/deploy-m
 | `FLY_APP_NAME` | Always for Actions — Fly Machines **`app`** slug (**`deploy-fly-ci.sh`** **`FLY_APP`**). Must match the app you deploy; GitHub masks this in logs. Any concrete **`app = "…"`** in **`kroger-mcp/fly.toml`** is still visible to anyone with the repo — rename the Fly app and update **`fly.toml`** if that must not disclose production. |
 | `KROGER_API_HOST` | Optional — if set, passed as **`_KROGER_API_HOST`** (_unset_ ⇒ default Kroger API host in build). |
 | `FLY_API_TOKEN` | Always. Create via **`fly tokens create`** scoped to deploy. |
+| `FIREBASE_AUTH_DOMAIN` | **Strongly recommended** if your Firebase Console **authDomain** is not **`{projectId}.firebaseapp.com`** (common when project id and hosting domain disagree). Passed to Cloud Build as **`_FIREBASE_AUTH_DOMAIN`** so **`/api/firebase-public-config`** serves the correct Auth host. |
+| `FIREBASE_PROJECT_ID` | Optional. If set, passed as **`_FIREBASE_PROJECT_ID`** (otherwise **`project_id`** inside **`FIREBASE_SERVICE_ACCOUNT_JSON`** is enough). |
 | `GCP_SA_KEY` | If **`GCP_USE_WIF`** is not **`true`** — JSON key for an SA that may **submit builds** (**`roles/cloudbuild.builds.editor`** or **`roles/run.admin`** + Artifact Registry **`writer`**, plus **`roles/iam.serviceAccountUser`** on the Cloud Build / runtime principals your project expects). If you use **`deploy-fly-ci.sh`**, the same principal must **`secretAccessor`** on **`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`** (optional **`KROGER_LOCATION_ID`**), matching local **`deploy-fly.ps1 -FromGcpSecretManager`** expectations. Mirrors what you already use locally for **`gcloud builds submit`**. |
 
 **Workload Identity Federation** (recommended over long-lived SA keys):
@@ -297,7 +314,7 @@ Set **`GCP_USE_WIF=true`** after following [Google’s “Configure Workload Ide
 
 | Surface | Mechanism |
 | ------- | --------- |
-| **Cloud Run (`cravecart-web`, MCPs)** | [`cloudbuild.yaml`](../cloudbuild.yaml) **`--set-secrets …=SECRET_NAME:latest`**. Containers receive env vars from mounted Secret Manager payloads (no plaintext values in YAML). Rotate by adding Secret Manager versions; redeploy pulls **`latest`** (usually what you want for CI/CD). |
+| **Cloud Run (`cravecart-web`, MCPs)** | [`cloudbuild.yaml`](../cloudbuild.yaml) **`--set-secrets …=SECRET_NAME:latest`**. **`cravecart-web`** mounts **`FIREBASE_SERVICE_ACCOUNT_JSON`** + **`FIREBASE_WEB_API_KEY`** (and optional **`_FIREBASE_AUTH_DOMAIN`** / **`_FIREBASE_PROJECT_ID`** substitutions from GitHub). Containers receive secret payloads as env (no plaintext values in YAML). Rotate by adding Secret Manager versions; redeploy pulls **`latest`**. |
 | **Fly Kroger MCP** | [`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) runs **`gcloud secrets versions access`** for **`KROGER_CLIENT_*`**, **`INTERNAL_SIDECAR_SECRET`**, optionally **`KROGER_LOCATION_ID`**, then **`fly secrets import`** (non-staged) and **`fly deploy`**. **`INTERNAL_SIDECAR_SECRET`** must match **`cravecart-web`** Secret Manager (**version pinning** in CI — see troubleshooting above). |
 | **`KROGER_LOCATION_ID`** | Prefer the Cloud Build **`_KROGER_LOCATION_ID`** substitution (GitHub Actions secret **`KROGER_LOCATION_ID`**); the script falls back to **Secret Manager secret** `KROGER_LOCATION_ID` or the live **`cravecart-web`** env if present. |
 

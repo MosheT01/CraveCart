@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server"
 
-import { clearLoggedInCookies } from "@/lib/server/auth/issueSessionCookie"
+import { clearFirebaseSessionCookie } from "@/lib/server/auth/firebaseSessionCookie"
 
 export const runtime = "nodejs"
 
 export async function POST() {
-  await clearLoggedInCookies()
+  await clearFirebaseSessionCookie()
   return NextResponse.json({ ok: true })
 }

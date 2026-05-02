@@ -13,7 +13,11 @@
 # - Grant the Cloud Run runtime SA (default compute) roles/secretmanager.secretAccessor
 #   on each secret you reference below.
 # - Create secrets: GEMINI_API_KEY, YOUTUBE_API_KEY, KROGER_CLIENT_ID, KROGER_CLIENT_SECRET,
-#   INTERNAL_SIDECAR_SECRET (shared with Fly Kroger MCP; never expose to browsers).
+#   INTERNAL_SIDECAR_SECRET (shared with Fly Kroger MCP; never expose to browsers),
+#   FIREBASE_SERVICE_ACCOUNT_JSON (full service account JSON as one blob),
+#   FIREBASE_WEB_API_KEY (Firebase web API key — restrict domains in Firebase console).
+#   Optional substitutions: _FIREBASE_AUTH_DOMAIN, _FIREBASE_PROJECT_ID (GitHub Actions secrets or --substitutions).
+#   Firebase: enable Auth (Email/Password) + Firestore; deploy rules: firebase deploy --only firestore:rules.
 #   KROGER_LOCATION_ID is usually set as a substitution (non-secret env on services).
 # - Youtube + optional GCP Kroger MCP: authenticated invoke only — web SA needs roles/run.invoker (steps below).
 #
@@ -48,6 +52,10 @@ substitutions:
   # Concrete numeric secret version from CI (once per workflow). Avoids Fly + Cloud Run drifting on INTERNAL_SIDECAR_SECRET
   # when "latest" rotates between Cloud Build and the Fly secrets step (recurring MCP 403 Unauthorized).
   _INTERNAL_SIDECAR_SECRET_VERSION: "latest"
+  # Optional OAuth domain when it is not `{projectId}.firebaseapp.com` (Firebase console → Web app config).
+  _FIREBASE_AUTH_DOMAIN: ""
+  # Optional explicit project id (otherwise inferred from FIREBASE_SERVICE_ACCOUNT_JSON).
+  _FIREBASE_PROJECT_ID: ""
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -193,6 +201,13 @@ steps:
         else
           KR_URL=$$(gcloud run services describe cravecart-kroger-mcp --region "us-central1" --format='value(status.url)')
         fi
+        WEB_ENV="NODE_ENV=production,GEMINI_MODEL=${_GEMINI_MODEL},KROGER_LOCATION_ID=${_KROGER_LOCATION_ID},YOUTUBE_SERVICE_URL=$$YT_URL,YOUTUBE_MCP_URL=$$YT_URL/mcp/,KROGER_SIDECAR_URL=$$KR_URL,KROGER_MCP_URL=$$KR_URL/mcp/,GIT_SHA=$BUILD_ID"
+        if [ -n "${_FIREBASE_AUTH_DOMAIN}" ]; then
+          WEB_ENV="$$WEB_ENV,FIREBASE_AUTH_DOMAIN=${_FIREBASE_AUTH_DOMAIN}"
+        fi
+        if [ -n "${_FIREBASE_PROJECT_ID}" ]; then
+          WEB_ENV="$$WEB_ENV,FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID}"
+        fi
         gcloud run deploy cravecart-web \
           --image "$$IMAGE" \
           --region "us-central1" \
@@ -204,8 +219,8 @@ steps:
           --min-instances 0 \
           --max-instances 1 \
           --timeout 3600 \
-          --set-env-vars "NODE_ENV=production,GEMINI_MODEL=${_GEMINI_MODEL},KROGER_LOCATION_ID=${_KROGER_LOCATION_ID},YOUTUBE_SERVICE_URL=$$YT_URL,YOUTUBE_MCP_URL=$$YT_URL/mcp/,KROGER_SIDECAR_URL=$$KR_URL,KROGER_MCP_URL=$$KR_URL/mcp/,GIT_SHA=$BUILD_ID" \
-          --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest,INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:${_INTERNAL_SIDECAR_SECRET_VERSION}"
+          --set-env-vars "$$WEB_ENV" \
+          --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest,INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:${_INTERNAL_SIDECAR_SECRET_VERSION},FIREBASE_SERVICE_ACCOUNT_JSON=FIREBASE_SERVICE_ACCOUNT_JSON:latest,FIREBASE_WEB_API_KEY=FIREBASE_WEB_API_KEY:latest"
     waitFor:
       - deploy-youtube-mcp
       - deploy-kroger-mcp

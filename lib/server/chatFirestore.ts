@@ -1,32 +1,18 @@
-import { randomUUID } from "node:crypto"
-import fs from "node:fs/promises"
-import path from "node:path"
+import type { ChatSessionMeta, StoredChatMessage } from "@/lib/server/chatTypes"
+import { getFirebaseAdminFirestore } from "@/lib/server/firebase/admin"
 
-import { getDataDir } from "@/lib/server/paths"
+export type { ChatSessionMeta, StoredChatMessage }
 
-export interface ChatSessionMeta {
-  id: string
-  title: string
-  createdAt: number
-}
+const COLLECTION = "cravecart_user_chats"
+const MAX_SESSIONS = 40
 
-export interface StoredChatMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  video: unknown | null
-  cart: unknown | null
-}
-
-interface UserChatFile {
+interface UserChatDoc {
   sessions: ChatSessionMeta[]
   messagesBySession: Record<string, StoredChatMessage[]>
 }
 
-const MAX_SESSIONS = 40
-
-function filePath(userId: string) {
-  return path.join(getDataDir(), "chat-history", `${userId}.json`)
+function docRef(userId: string) {
+  return getFirebaseAdminFirestore().collection(COLLECTION).doc(userId)
 }
 
 let writeChains = new Map<string, Promise<void>>()
@@ -46,27 +32,22 @@ function chainFor(userId: string): { run: <T>(fn: () => Promise<T>) => Promise<T
   }
 }
 
-async function read(userId: string): Promise<UserChatFile> {
-  const p = filePath(userId)
-  try {
-    const raw = await fs.readFile(p, "utf8")
-    const data = JSON.parse(raw) as UserChatFile
-    if (!data.sessions) data.sessions = []
-    if (!data.messagesBySession) data.messagesBySession = {}
-    return data
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException
-    if (err.code === "ENOENT") return { sessions: [], messagesBySession: {} }
-    throw e
+async function read(userId: string): Promise<UserChatDoc> {
+  const snap = await docRef(userId).get()
+  if (!snap.exists) return { sessions: [], messagesBySession: {} }
+  const d = snap.data() as Partial<UserChatDoc> | undefined
+  return {
+    sessions: Array.isArray(d?.sessions) ? d!.sessions : [],
+    messagesBySession:
+      d?.messagesBySession && typeof d.messagesBySession === "object" ? d.messagesBySession : {},
   }
 }
 
-async function write(userId: string, data: UserChatFile): Promise<void> {
-  const p = filePath(userId)
-  await fs.mkdir(path.dirname(p), { recursive: true })
-  const tmp = `${p}.${randomUUID()}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8")
-  await fs.rename(tmp, p)
+async function write(userId: string, data: UserChatDoc): Promise<void> {
+  await docRef(userId).set({
+    sessions: data.sessions,
+    messagesBySession: data.messagesBySession,
+  })
 }
 
 export async function listSessions(userId: string): Promise<ChatSessionMeta[]> {
