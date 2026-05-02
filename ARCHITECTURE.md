@@ -6,6 +6,8 @@ CraveCart is a chat-first grocery agent that sits between a browser UI, Gemini, 
 
 This document explains the repo as it actually exists today: service boundaries, runtime flow, state model, auth, tool orchestration, and the current tradeoffs that matter if you are extending or operating it.
 
+**Why the shape is interesting:** CraveCart is a small codebase that behaves like a much larger system. A single chat turn can chain **Gemini tool-calling**, **two language-agnostic MCP sidecars** (Python), **native YouTube search + transcript strategy** (probe cheap, fetch expensive paths carefully), **retail-aware product matching** (deterministic ranking over raw LLM picks), **real OAuth cart writes** (tokens never touch the browser), and **durable multi-session chat** (Firestore) — with **server-side intent policy** sitting between the model and mutations. The diagrams below are meant to match that reality, not a simplified marketing block.
+
 ## 1. System Overview
 
 At a high level, the product promise is:
@@ -70,25 +72,146 @@ Key entry files:
 
 ## 3. Runtime Topology
 
+### 3.1 Logical architecture (services and trust boundaries)
+
+This is the **authoritative** high-level picture: what talks to what, and where secrets live.
+
 ```mermaid
-flowchart LR
-    U["User Browser"] --> W["web (Next.js + Gemini host)"]
-    W --> FB["Firebase Auth + Firestore"]
-    W --> G["Gemini API"]
-    W --> YM["youtube-mcp"]
-    W --> KM["kroger-mcp"]
-    YM --> Y["YouTube Data API"]
-    YM --> S["Supadata Transcript API (native only)"]
-    YM --> T["Direct transcript probe / fallback"]
-    KM --> K["Kroger APIs"]
+flowchart TB
+  subgraph Browser["User browser"]
+    UI["Chat UI · SSE client · Firebase Auth SDK"]
+  end
+
+  subgraph Web["web — Next.js App Router (agent host)"]
+    Routes["/api/chat SSE · auth · chat-sessions · Kroger OAuth facade"]
+    Agent["runAgentTurn · Gemini · MCP client · intent + tool runtime"]
+  end
+
+  subgraph Sidecars["Backend-only MCP sidecars"]
+    YM["youtube-mcp (FastAPI + FastMCP)"]
+    KM["kroger-mcp (FastAPI + FastMCP + OAuth store)"]
+  end
+
+  subgraph External["Third-party APIs"]
+    GEM["Google Gemini API"]
+    FB["Firebase Auth + Firestore"]
+    YT["YouTube Data API"]
+    SUP["Supadata /v1/transcript (native captions only)"]
+    KRO["Kroger OAuth + Catalog + Cart APIs"]
+  end
+
+  UI -->|HTTPS same origin| Routes
+  UI -->|Firebase JS SDK| FB
+  Routes --> Agent
+  Agent <-->|REST · tool calls| GEM
+  Agent -->|Streamable HTTP MCP| YM
+  Agent -->|Streamable HTTP MCP| KM
+  Routes -->|Firebase Admin · HTTP-only cravecart_fb_session| FB
+  Routes -->|start/callback · cravecart_session cookie| KM
+  UI -.->|user follows 302| KRO
+  KRO -.->|authorization code to /auth/kroger/callback| Routes
+  YM -->|search, transcript probe, direct-caption fallback| YT
+  YM --> SUP
+  KM --> KRO
 ```
+
+**Cookies (two different jobs):**
+
+- **`cravecart_fb_session`** — Firebase session cookie; identifies the signed-in user for `/api/chat` and Firestore-backed history.
+- **`cravecart_session`** — opaque id shared with `kroger-mcp` for Kroger OAuth state and cart token storage (not the Firebase uid).
 
 Important boundaries:
 
-- Gemini never calls the internet directly from the browser.
-- Gemini never touches Kroger tokens directly.
-- MCP services do not render UI.
-- The browser never sees Kroger access tokens, refresh tokens, or client secrets.
+- The **browser never receives Kroger access/refresh tokens** or Kroger client secrets; `kroger-mcp` holds token JSON per session (file-backed; see §7.5).
+- **Gemini runs only on the server** (`web`); the model never calls MCP or Kroger from the client.
+- **MCP sidecars do not serve HTML**; they expose MCP over HTTP and small operational/health/auth helper endpoints consumed by `web`.
+- **Firestore chat** is written only through server routes with the Admin SDK; client rules deny direct reads/writes ([firestore.rules](firestore.rules)).
+
+### 3.2 Local infrastructure (Docker Compose)
+
+Typical laptop setup: one published port for the UI; MCP containers stay on the Compose network. Kroger session files persist in a named volume.
+
+```mermaid
+flowchart LR
+  subgraph Dev["Developer machine"]
+    BR["Browser"]
+    subgraph Net["docker compose network"]
+      WEB["web :3000 → host"]
+      YT["youtube-mcp :8100 internal"]
+      KR["kroger-mcp :8000 internal"]
+    end
+    subgraph Persist["Persistence"]
+      SA["Host path → /secrets/firebase-sa.json in web"]
+      VOL[("Docker volume kroger_mcp_data → /app/data")]
+    end
+  end
+
+  BR -->|http://localhost:3000| WEB
+  WEB -->|YOUTUBE_MCP_URL / YOUTUBE_SERVICE_URL| YT
+  WEB -->|KROGER_MCP_URL / KROGER_SIDECAR_URL| KR
+  WEB -.-> SA
+  KR --> VOL
+```
+
+`INTERNAL_SIDECAR_SECRET` is optional on Compose for short internal hostnames, but when set, `web` attaches `Authorization: Bearer …` on outbound sidecar calls (see [lib/server/sidecarGatewayFetch.ts](lib/server/sidecarGatewayFetch.ts)). **Production** Cloud Run → Fly hybrid **requires** the same secret bytes on both sides ([docs/deploy-cloud-run.md](docs/deploy-cloud-run.md)).
+
+### 3.3 Production infrastructure (GCP + Firebase + optional Fly)
+
+The automated path is [cloudbuild.yaml](cloudbuild.yaml) → Artifact Registry → Cloud Run. **Only `cravecart-web` is public** (`--allow-unauthenticated`). YouTube MCP on Cloud Run is **IAM-invoked only**; `web` attaches a **Google ID token** (`audience` = sidecar URL). When Kroger MCP runs on **Fly.io**, `web` uses **`INTERNAL_SIDECAR_SECRET`** as a shared bearer (never sent to browsers).
+
+```mermaid
+flowchart TB
+  subgraph Internet["Public internet"]
+    User["Browser"]
+  end
+
+  subgraph Firebase["Firebase (Google-hosted)"]
+    FAuth["Authentication email/password"]
+    FS[("Cloud Firestore cravecart_user_chats")]
+  end
+
+  subgraph GCP["Google Cloud — typical us-central1 deploy"]
+    CB["Cloud Build pipeline"]
+    AR[("Artifact Registry images")]
+    SM[("Secret Manager keys + INTERNAL_SIDECAR_SECRET + Firebase Admin JSON blob")]
+
+    subgraph CR["Cloud Run services"]
+      WEB["cravecart-web — public ingress · long SSE timeout"]
+      YTM["cravecart-youtube-mcp — no public invoker · run.invoker for web SA"]
+      KRC["cravecart-kroger-mcp — optional when Kroger lives on Cloud Run"]
+    end
+  end
+
+  subgraph ExternalAPIs["External APIs (from Cloud Run egress)"]
+    GEM["Gemini API"]
+    YTAPI["YouTube Data API"]
+  end
+
+  subgraph FlyOpt["Optional: Kroger MCP on Fly.io"]
+    FLY["HTTPS app · internal_gate bearer"]
+    FVOL[("Persistent volume — OAuth + session JSON")]
+  end
+
+  CB --> AR
+  CB --> CR
+  SM -.->|mounted as env / secrets at runtime| WEB
+  SM -.->|mounted| YTM
+  User --> WEB
+  User --> FAuth
+  WEB -->|Admin SDK| FS
+  WEB --> GEM
+  WEB -->|OIDC ID token Authorization| YTM
+  WEB -->|Bearer INTERNAL_SIDECAR_SECRET| FLY
+  WEB -->|optional IAM ID token if KRC deployed| KRC
+  YTM --> YTAPI
+  FLY --> FVOL
+```
+
+`cravecart-kroger-mcp` on Cloud Run (when not using Fly) uses the same **file-backed session layout** inside the container unless you add shared storage; the Fly path keeps OAuth JSON on a **Fly volume** for persistence across restarts.
+
+**Hybrid note:** when `_EXTERNAL_KROGER_SIDECAR_URL` is set in Cloud Build, deploy skips **`cravecart-kroger-mcp`** and points `KROGER_*_URL` at Fly ([cloudbuild.yaml](cloudbuild.yaml)). CI can pin `INTERNAL_SIDECAR_SECRET` to a **specific Secret Manager version** so Cloud Run and Fly never drift ([.github/workflows/deploy-main.yml](.github/workflows/deploy-main.yml), [scripts/ci/pin_internal_sidecar_secret_version.py](scripts/ci/pin_internal_sidecar_secret_version.py)).
+
+After deploy, **`sync-public-urls`** sets `APP_BASE_URL` and `KROGER_REDIRECT_URI` on `web` (and on Cloud Run Kroger MCP when used) so Kroger OAuth matches the live callback.
 
 ## 4. Service Responsibilities
 
@@ -846,6 +969,8 @@ This matters because:
 - follow-up turns can skip redundant tool calls
 
 ## 23. Deployment Shape
+
+**Diagrams:** local Compose and production GCP/Firebase/Fly topology are drawn in §3.2 and §3.3 under [Runtime Topology](#3-runtime-topology).
 
 Primary files:
 
