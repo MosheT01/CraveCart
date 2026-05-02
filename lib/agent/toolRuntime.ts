@@ -264,7 +264,7 @@ export class AgentToolRuntime {
           type: "object",
           properties: {
             dish: { type: "string" },
-            recipeSource: { type: "string", enum: ["youtube_transcript", "fallback_recipe", "none"] },
+            recipeSource: { type: "string", enum: ["youtube_transcript", "fallback_recipe", "video_metadata", "none"] },
             unmatchedIngredients: {
               type: "array",
               items: { type: "string" },
@@ -560,6 +560,7 @@ export class AgentToolRuntime {
       recipeSource = "youtube_transcript"
       recipeText = buildVideoRecipeText(result.data.video, result.data.transcript)
     } else {
+      recipeSource = "video_metadata"
       recipeText = buildVideoDescriptionContext(
         result.data.video,
         result.data.transcriptStatus,
@@ -952,7 +953,8 @@ export class AgentToolRuntime {
       message: status === "partial_cart_ready" ? "Some ingredients could not be matched or added." : undefined,
     }
 
-    this.latestArtifact = artifact
+    const priorVideoArtifact = this.latestArtifact?.kind === "video" ? this.latestArtifact : null
+    this.latestArtifact = priorVideoArtifact ?? artifact
     this.latestCart = artifact
     this.pendingSelections.clear()
 
@@ -1024,7 +1026,7 @@ export class AgentToolRuntime {
 }
 
 function isRecipeSourceValue(value: unknown): value is RecipeSource | "none" {
-  return value === "youtube_transcript" || value === "fallback_recipe" || value === "none"
+  return value === "youtube_transcript" || value === "fallback_recipe" || value === "video_metadata" || value === "none"
 }
 
 function isVideoMeta(

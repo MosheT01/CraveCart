@@ -77,6 +77,7 @@ Register **exactly** that redirect URI in the Kroger developer console.
    | --------------------------- | ------- |
    | `GEMINI_API_KEY`            | web |
    | `YOUTUBE_API_KEY`           | web + `cravecart-youtube-mcp` |
+   | `SUPADATA_API_KEY`          | `cravecart-youtube-mcp` — recommended native-caption provider for public YouTube videos |
    | `KROGER_CLIENT_ID`          | web (+ `cravecart-kroger-mcp` if that service exists) |
    | `KROGER_CLIENT_SECRET`      | web (+ `cravecart-kroger-mcp` if that service exists) |
    | `INTERNAL_SIDECAR_SECRET`   | **`cravecart-web`** (outbound auth) + **Fly Kroger MCP** (bearer gate). Create once, e.g. `openssl rand -base64 32 \| gcloud secrets create INTERNAL_SIDECAR_SECRET --data-file=-` |
@@ -177,6 +178,7 @@ Map a domain to `cravecart-web` in Cloud Run, then update env:
 
 - `pnpm install && pnpm build` (or Docker `docker compose build web && docker compose up`).
 - Open `/api/health` and confirm sidecars respond when URLs in `.env` match your local or compose network, and **`firebaseConfigured`** is `true` when Firebase env + Admin credentials are loaded.
+- For `youtube-mcp`, `GET /health` should show **`supadataConfigured: true`** when the secret is mounted correctly.
 - Firestore rules: from repo root, `firebase deploy --only firestore:rules` (after `firebase login`), using [`.firebaserc`](../.firebaserc) / [firebase.json](../firebase.json).
 
 ## Observability
@@ -299,6 +301,7 @@ The workflow [`.github/workflows/deploy-main.yml`](../.github/workflows/deploy-m
 | `FLY_API_TOKEN` | Always. Create via **`fly tokens create`** scoped to deploy. |
 | `FIREBASE_AUTH_DOMAIN` | **Strongly recommended** if your Firebase Console **authDomain** is not **`{projectId}.firebaseapp.com`** (common when project id and hosting domain disagree). Passed to Cloud Build as **`_FIREBASE_AUTH_DOMAIN`** so **`/api/firebase-public-config`** serves the correct Auth host. |
 | `FIREBASE_PROJECT_ID` | Optional. If set, passed as **`_FIREBASE_PROJECT_ID`** (otherwise **`project_id`** inside **`FIREBASE_SERVICE_ACCOUNT_JSON`** is enough). |
+| `SUPADATA_API_KEY` | Optional mirror only. The deploy workflow does **not** read this secret directly; runtime still mounts `SUPADATA_API_KEY` from **GCP Secret Manager** into `cravecart-youtube-mcp`. Keeping a repo secret copy can help operators track the current value inventory in one place. |
 | `GCP_SA_KEY` | If **`GCP_USE_WIF`** is not **`true`** — JSON key for an SA that may **submit builds** (**`roles/cloudbuild.builds.editor`** or **`roles/run.admin`** + Artifact Registry **`writer`**, plus **`roles/iam.serviceAccountUser`** on the Cloud Build / runtime principals your project expects). If you use **`deploy-fly-ci.sh`**, the same principal must **`secretAccessor`** on **`KROGER_CLIENT_ID`**, **`KROGER_CLIENT_SECRET`**, **`INTERNAL_SIDECAR_SECRET`** (optional **`KROGER_LOCATION_ID`**), matching local **`deploy-fly.ps1 -FromGcpSecretManager`** expectations. Mirrors what you already use locally for **`gcloud builds submit`**. |
 
 **Workload Identity Federation** (recommended over long-lived SA keys):
@@ -317,6 +320,8 @@ Set **`GCP_USE_WIF=true`** after following [Google’s “Configure Workload Ide
 | **Cloud Run (`cravecart-web`, MCPs)** | [`cloudbuild.yaml`](../cloudbuild.yaml) **`--set-secrets …=SECRET_NAME:latest`**. **`cravecart-web`** mounts **`FIREBASE_SERVICE_ACCOUNT_JSON`** + **`FIREBASE_WEB_API_KEY`** (and optional **`_FIREBASE_AUTH_DOMAIN`** / **`_FIREBASE_PROJECT_ID`** substitutions from GitHub). Containers receive secret payloads as env (no plaintext values in YAML). Rotate by adding Secret Manager versions; redeploy pulls **`latest`**. |
 | **Fly Kroger MCP** | [`kroger-mcp/deploy-fly-ci.sh`](../kroger-mcp/deploy-fly-ci.sh) runs **`gcloud secrets versions access`** for **`KROGER_CLIENT_*`**, **`INTERNAL_SIDECAR_SECRET`**, optionally **`KROGER_LOCATION_ID`**, then **`fly secrets import`** (non-staged) and **`fly deploy`**. **`INTERNAL_SIDECAR_SECRET`** must match **`cravecart-web`** Secret Manager (**version pinning** in CI — see troubleshooting above). |
 | **`KROGER_LOCATION_ID`** | Prefer the Cloud Build **`_KROGER_LOCATION_ID`** substitution (GitHub Actions secret **`KROGER_LOCATION_ID`**); the script falls back to **Secret Manager secret** `KROGER_LOCATION_ID` or the live **`cravecart-web`** env if present. |
+
+`SUPADATA_API_KEY` follows the same runtime pattern as the other Cloud Run-mounted secrets: Secret Manager is the source of truth, and `cloudbuild.yaml` mounts it into `cravecart-youtube-mcp`. A GitHub repo secret mirror is optional bookkeeping, not a deploy input.
 
 ### Security notes (reasonable defaults)
 

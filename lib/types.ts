@@ -8,7 +8,7 @@ export type IngredientCategory =
   | "beverage"
   | "other"
 
-export type RecipeSource = "youtube_transcript" | "fallback_recipe"
+export type RecipeSource = "youtube_transcript" | "fallback_recipe" | "video_metadata"
 
 export type ProgressStepId =
   | "finding_recipe"

@@ -49,12 +49,6 @@ const EXAMPLES = [
   { icon: Sparkles, text: "Find a good chicken alfredo video and buy the groceries" },
 ] as const
 
-const FEATURE_PILLS = [
-  "YouTube search & transcripts",
-  "Kroger product matching",
-  "Live cart actions",
-]
-
 interface UiMessage {
   id: string
   role: "user" | "assistant"
@@ -87,7 +81,6 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const [userLoaded, setUserLoaded] = useState(false)
   const [krogerConnected, setKrogerConnected] = useState(false)
-  const [krogerIsMock, setKrogerIsMock] = useState(false)
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
@@ -114,7 +107,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!userLoaded || typeof window === "undefined") return
     setKrogerPromptDismissed(isKrogerConnectPromptDismissed(window.sessionStorage))
-  }, [userLoaded, user, krogerConnected, krogerIsMock])
+  }, [userLoaded, user, krogerConnected])
 
   useEffect(() => {
     if (!userLoaded || typeof window === "undefined") return
@@ -138,10 +131,10 @@ export default function HomePage() {
     ) {
       return
     }
-    if (krogerConnected || krogerIsMock) return
+    if (krogerConnected) return
     if (isKrogerConnectPromptDismissed(window.sessionStorage)) return
     setKrogerConnectPromptOpen(true)
-  }, [userLoaded, user, krogerConnected, krogerIsMock])
+  }, [userLoaded, user, krogerConnected])
 
   function handleOnboardingOpenChange(open: boolean) {
     setOnboardingOpen(open)
@@ -149,7 +142,7 @@ export default function HomePage() {
       markFirstVisitTourSeen(window.localStorage)
       // After tour, eligible users see Kroger prompt on next effect tick — open here if onboarding blocked it
       queueMicrotask(() => {
-        if (!user || krogerConnected || krogerIsMock) return
+        if (!user || krogerConnected) return
         if (isKrogerConnectPromptDismissed(sessionStorage)) return
         setKrogerConnectPromptOpen(true)
       })
@@ -162,30 +155,16 @@ export default function HomePage() {
       if (!r.ok) return
       const d = (await r.json()) as {
         authenticated?: boolean
-        mockMode?: boolean
         needsFirebaseAuth?: boolean
       }
       if (d.needsFirebaseAuth) return
-
-      if (d.mockMode) {
-        clearKrogerConnectRedirectPending()
-        setKrogerIsMock(true)
-        setKrogerConnected(true)
-        localStorage.setItem("cravecart_kroger_connected", "1")
-        localStorage.setItem("cravecart_kroger_mock", "1")
-        return
-      }
-
-      setKrogerIsMock(false)
       if (d.authenticated) {
         clearKrogerConnectRedirectPending()
         setKrogerConnected(true)
         localStorage.setItem("cravecart_kroger_connected", "1")
-        localStorage.removeItem("cravecart_kroger_mock")
       } else {
         setKrogerConnected(false)
         localStorage.removeItem("cravecart_kroger_connected")
-        localStorage.removeItem("cravecart_kroger_mock")
       }
     } catch {
       // Leave prior UI state on network errors.
@@ -382,9 +361,7 @@ export default function HomePage() {
       credentials: "same-origin",
     })
     setKrogerConnected(false)
-    setKrogerIsMock(false)
     localStorage.removeItem("cravecart_kroger_connected")
-    localStorage.removeItem("cravecart_kroger_mock")
     clearKrogerConnectRedirectPending()
     if (typeof window !== "undefined") {
       clearKrogerConnectPromptDismissed(window.sessionStorage)
@@ -628,7 +605,6 @@ export default function HomePage() {
     <OnboardingOverlay
       open={onboardingOpen}
       onOpenChange={handleOnboardingOpenChange}
-      onKrogerMockConnected={handleKrogerConnected}
       signedIn={Boolean(user)}
     />
   )
@@ -702,9 +678,7 @@ export default function HomePage() {
           {/* Kroger button */}
           <KrogerConnectButton
             isConnected={krogerConnected}
-            isMock={krogerIsMock}
-            attentionNudge={krogerPromptDismissed && !krogerConnected && !krogerIsMock}
-            onConnected={handleKrogerConnected}
+            attentionNudge={krogerPromptDismissed && !krogerConnected}
             onDisconnected={handleKrogerDisconnected}
           />
         </header>
@@ -721,54 +695,37 @@ export default function HomePage() {
               >
                 {/* Welcome screen */}
                 {messages.length === 0 && (
-                  <div className="flex min-h-full flex-col gap-4 pb-2">
-                    {/* Cinematic hero fill — tagline + food floaters + category chips */}
-                    <div className="flex min-h-0 flex-1 items-center justify-center py-2">
+                  <div className="flex min-h-full flex-col gap-3 pb-3">
+                    {/* Masthead — tagline + cravings */}
+                    <div className="flex min-h-0 shrink-0 items-center justify-center pt-2 md:pt-3">
                       <WelcomeHero onSelectCategory={submitPrompt} agentChatEnabled />
                     </div>
-                    <article className="w-full">
 
-                      {/* Hero card */}
-                      <div className="surface-glass interactive-shimmer relative overflow-hidden rounded-[28px] px-6 py-6">
-                        {/* Top gradient line */}
+                    <article className="w-full space-y-3">
+                      {/* Primary prompt card */}
+                      <div className="surface-glass interactive-shimmer relative overflow-hidden rounded-[24px] px-5 py-5 sm:rounded-[28px] sm:px-6 sm:py-6">
                         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
 
-                        <div className="flex items-start gap-4">
-                          <div className="relative mt-0.5 shrink-0">
-                            <div className="absolute inset-0 rounded-xl bg-primary/20 blur-md" />
-                            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-primary/30 bg-gradient-to-br from-primary/25 to-primary/8">
-                              <ShoppingCart className="h-5 w-5 text-primary" />
+                        <div className="flex gap-4">
+                          <div className="relative mt-1 shrink-0">
+                            <div className="absolute inset-0 rounded-xl bg-primary/18 blur-lg" />
+                            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-primary/28 bg-gradient-to-br from-primary/22 to-primary/6">
+                              <ShoppingCart className="h-5 w-5 text-primary" aria-hidden />
                             </div>
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-[10px] uppercase tracking-[0.22em] text-white/35">
-                              CraveCart · AI Agent
-                            </p>
-                            <h1 className="mt-2 text-2xl font-semibold leading-snug tracking-tight text-white md:text-[1.65rem]">
+                            <h1 className="text-xl font-semibold leading-snug tracking-tight text-white sm:text-[1.375rem]">
                               Hey {firstName}, what are you craving?
                             </h1>
-                            <p className="mt-2 text-[14px] leading-relaxed text-white/55">
-                              Tell me a dish, a video, or just "buy groceries" — I'll handle the rest
-                              across YouTube and Kroger in real time.
+                            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/52 sm:text-[14px]">
+                              One conversation for video, groceries, and (when Kroger&apos;s linked) cart — start with anything below or type your own.
                             </p>
                           </div>
                         </div>
-
-                        {/* Feature pills */}
-                        <div className="mt-5 flex flex-wrap gap-2">
-                          {FEATURE_PILLS.map((pill) => (
-                            <span
-                              key={pill}
-                              className="rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-1 text-[11px] text-white/45"
-                            >
-                              {pill}
-                            </span>
-                          ))}
-                        </div>
                       </div>
 
-                      {/* Suggestion chips */}
-                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {/* Starter prompts */}
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         {EXAMPLES.map(({ icon: Icon, text }) => (
                           <button
                             key={text}
@@ -885,12 +842,12 @@ export default function HomePage() {
                   onSubmit={submitPrompt}
                   isLoading={isSending}
                   placeholder={
-                    krogerConnected || krogerIsMock
+                    krogerConnected
                       ? "Ask for a recipe, groceries, or both…"
                       : "Chat works now — link Kroger (top-right) when you want cart checkout…"
                   }
                 />
-                {!krogerConnected && !krogerIsMock ? (
+                {!krogerConnected ? (
                   <p className="mt-2 text-center text-[11px] text-white/32">
                     Without Kroger, the assistant can browse ideas and prep lists — reconnect when you&apos;re ready to match products and carts.
                   </p>
@@ -906,7 +863,6 @@ export default function HomePage() {
       <ConnectKrogerPromptDialog
         open={krogerConnectPromptOpen}
         onOpenChange={setKrogerConnectPromptOpen}
-        onConnected={handleKrogerConnected}
         afterDismissPersist={() => setKrogerPromptDismissed(true)}
       />
     {onboardingOverlay}
@@ -946,7 +902,10 @@ function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
   const video = output.video as Record<string, unknown> | undefined
   if (!video || typeof video.title !== "string" || typeof video.url !== "string" || typeof video.channel !== "string") return null
   const recipeSource =
-    output.recipeSource === "youtube_transcript" || output.recipeSource === "fallback_recipe" || output.recipeSource === "none"
+    output.recipeSource === "youtube_transcript" ||
+    output.recipeSource === "fallback_recipe" ||
+    output.recipeSource === "video_metadata" ||
+    output.recipeSource === "none"
       ? output.recipeSource : "none"
   return {
     kind: "video",

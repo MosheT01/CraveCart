@@ -12,7 +12,6 @@ export async function GET() {
     return NextResponse.json({
       authenticated: false,
       configured: false,
-      mockMode: false,
       needsFirebaseAuth: true as const,
     })
   }
@@ -24,8 +23,6 @@ export async function GET() {
   return NextResponse.json({
     authenticated: Boolean(st.authenticated),
     configured: Boolean(st.configured),
-    /** Kroger API not configured — dev / missing secrets; UI may still allow limited flows. */
-    mockMode: !st.configured,
     needsFirebaseAuth: false as const,
   })
 }

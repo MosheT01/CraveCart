@@ -28,11 +28,7 @@ function getPendingHandoffSnapshot() {
   return localStorage.getItem(KROGER_CONNECT_PENDING_STORAGE_KEY) === "1"
 }
 
-interface ConnectKrogerBannerProps {
-  onConnected: () => void
-}
-
-export function ConnectKrogerBanner({ onConnected }: ConnectKrogerBannerProps) {
+export function ConnectKrogerBanner() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const hasPendingHandoff = useSyncExternalStore(subscribePendingHandoff, getPendingHandoffSnapshot, () => false)
@@ -42,10 +38,6 @@ export function ConnectKrogerBanner({ onConnected }: ConnectKrogerBannerProps) {
     setError(null)
     try {
       const result = await startKrogerConnect()
-      if (result.kind === "mock") {
-        onConnected()
-        return
-      }
       if (result.kind === "redirect") {
         return
       }

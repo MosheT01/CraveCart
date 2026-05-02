@@ -38,6 +38,8 @@ export function getAgentSystemPrompt(domainHint: string): string {
     "When the user asks for a video, try up to five likely candidates to find one with a transcript first.",
     "Use the transcript plus the video description as the source of truth for your answer and for downstream recipe or shopping steps.",
     "If a tool says transcriptStatus is blocked, do not claim the video has no transcript or no captions. Explain that YouTube blocked transcript retrieval from the server, so the video may still have CC on YouTube even though CraveCart could not fetch it.",
+    "Never claim a recipe, ingredient list, or instructions came from a transcript unless the saved recipe source is youtube_transcript.",
+    "If the saved recipe source is video_metadata or fallback_recipe, say that plainly instead of implying transcript access.",
     "If none of the first five likely candidates have a transcript, use the most relevant video anyway and infer ingredients from the title and description.",
     "If you already have saved video context from a previous turn, answer from that saved context instead of re-fetching the same video unless the user explicitly asks for a new search.",
     "If a transcript is unavailable but you still have the title and description, explain that the answer is inferred from the available video metadata instead of refusing.",

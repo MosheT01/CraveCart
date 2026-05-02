@@ -1,4 +1,4 @@
-/** Set when navigating away to Kroger OAuth; cleared when connection is verified or mocked. */
+/** Set when navigating away to Kroger OAuth; cleared when connection is verified. */
 export const KROGER_CONNECT_PENDING_STORAGE_KEY = "cravecart_kroger_pending" as const
 
 /** DOM event so UI can re-read localStorage (same-tab clears do not emit `storage`). */
@@ -23,13 +23,12 @@ export function clearKrogerConnectRedirectPending() {
 }
 
 export type KrogerStartConnectResult =
-  | { kind: "mock" }
   | { kind: "redirect" }
   | { kind: "unauthorized" }
   | { kind: "error"; message?: string }
 
 /**
- * Starts Kroger OAuth (or mock mode). On real OAuth, redirects the browser and does not return.
+ * Starts Kroger OAuth. On success, redirects the browser and does not return.
  */
 export async function startKrogerConnect(): Promise<KrogerStartConnectResult> {
   try {
@@ -37,17 +36,10 @@ export async function startKrogerConnect(): Promise<KrogerStartConnectResult> {
       method: "POST",
       credentials: "same-origin",
     })
-    const data = (await res.json()) as { mockMode?: boolean; authUrl?: string; message?: string; error?: string }
+    const data = (await res.json()) as { authUrl?: string; message?: string; error?: string }
 
     if (res.status === 401) {
       return { kind: "unauthorized" }
-    }
-
-    if (data.mockMode) {
-      clearKrogerConnectRedirectPending()
-      localStorage.setItem("cravecart_kroger_connected", "1")
-      localStorage.setItem("cravecart_kroger_mock", "1")
-      return { kind: "mock" }
     }
 
     if (data.authUrl) {

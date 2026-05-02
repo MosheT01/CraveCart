@@ -9,6 +9,7 @@ interface CartReadyCardProps {
 
 export function CartReadyCard({ cart }: CartReadyCardProps) {
   const isPartial = cart.status === "partial_cart_ready"
+  const recipeSourceLabel = cart.recipeSource === "none" ? "unknown" : cart.recipeSource.replace("_", " ")
 
   return (
     <section className="rounded-[32px] border border-white/20 bg-[linear-gradient(160deg,rgba(255,255,255,0.96),rgba(246,241,232,0.94))] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.24)]">
@@ -39,7 +40,7 @@ export function CartReadyCard({ cart }: CartReadyCardProps) {
         <SummaryTile icon={ShoppingBag} label="Items Added" value={String(cart.itemsAdded)} />
         <SummaryTile icon={Store} label="Retailer" value={cart.retailer} />
         <SummaryTile icon={CheckCircle2} label="Estimated Total" value={cart.estimatedTotal} />
-        <SummaryTile icon={ShoppingBag} label="Recipe Source" value={cart.recipeSource.replace("_", " ")} />
+        <SummaryTile icon={ShoppingBag} label="Recipe Source" value={recipeSourceLabel} />
       </div>
 
       {cart.video ? (

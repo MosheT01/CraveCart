@@ -88,4 +88,54 @@ describe("handleCraveRequest", () => {
       authUrl: "/auth/kroger",
     })
   })
+
+  it("maps unknown cart source to video_metadata for legacy responses", async () => {
+    runAgentTurn.mockResolvedValue({
+      assistantMessage: "Your Kroger cart is ready.",
+      activity: [],
+      artifact: null,
+      needsAuth: false,
+      authUrl: null,
+      cart: {
+        kind: "cart",
+        status: "cart_ready",
+        dish: "American cheeseburger",
+        retailer: "Kroger",
+        itemsAdded: 1,
+        estimatedTotal: "$8.49",
+        items: [
+          {
+            ingredient: "ground beef",
+            selectedProduct: "Kroger Ground Beef 80/20",
+            quantity: 1,
+            unit: "package",
+            price: "$8.49",
+            upc: "123",
+          },
+        ],
+        openCartUrl: "https://www.kroger.com/cart",
+        unmatchedIngredients: [],
+        recipeSource: "none",
+        video: {
+          title: "Best American Cheeseburger",
+          url: "https://www.youtube.com/watch?v=demo",
+          channel: "Demo Chef",
+        },
+      },
+    })
+
+    const { handleCraveRequest } = await import("@/lib/api/handleCraveRequest")
+    const response = await handleCraveRequest(
+      {
+        craving: "I'm craving an American cheeseburger",
+        servings: 4,
+      },
+      "session-123",
+    )
+
+    expect(response.status).toBe("cart_ready")
+    if (response.status === "cart_ready") {
+      expect(response.hiddenDetails.recipeSource).toBe("video_metadata")
+    }
+  })
 })

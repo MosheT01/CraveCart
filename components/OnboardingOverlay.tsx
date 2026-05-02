@@ -29,8 +29,6 @@ const DEMO_INGREDIENTS = [
 interface OnboardingOverlayProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Called when mock Kroger mode connects without redirect */
-  onKrogerMockConnected: () => void
   /** When false (tour above login), step 3 is informational — no Kroger OAuth until signed in. */
   signedIn: boolean
 }
@@ -38,7 +36,6 @@ interface OnboardingOverlayProps {
 export function OnboardingOverlay({
   open,
   onOpenChange,
-  onKrogerMockConnected,
   signedIn,
 }: OnboardingOverlayProps) {
   const [step, setStep] = useState(0)
@@ -75,11 +72,6 @@ export function OnboardingOverlay({
     setConnectErr(null)
     try {
       const result = await startKrogerConnect()
-      if (result.kind === "mock") {
-        onKrogerMockConnected()
-        handleOpenChange(false)
-        return
-      }
       if (result.kind === "redirect") {
         markFirstVisitTourSeen(window.localStorage)
         return

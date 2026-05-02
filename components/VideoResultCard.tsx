@@ -16,7 +16,7 @@ export function VideoResultCard({ video }: VideoResultCardProps) {
           : "Transcript unavailable"
   const sourceLabel =
     video.recipeSource === "none"
-      ? "video metadata"
+      ? "unknown"
       : video.recipeSource.replace("_", " ")
 
   return (

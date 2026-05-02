@@ -5,57 +5,55 @@ import { Loader2, LogOut, ShoppingBag } from "lucide-react"
 import { clearKrogerConnectRedirectPending, startKrogerConnect } from "@/lib/kroger/clientStartConnect"
 import { cn } from "@/lib/utils"
 
-type ConnectStatus = "idle" | "loading" | "connected" | "mock"
+type ConnectStatus = "idle" | "loading" | "connected"
 
 interface KrogerConnectButtonProps {
   isConnected: boolean
-  isMock: boolean
   /** Gentle motion + glow — use when user dismissed the Kroger prompt but hasn’t linked yet */
   attentionNudge?: boolean
-  onConnected: () => void
   onDisconnected: () => Promise<void>
 }
 
 export function KrogerConnectButton({
   isConnected,
-  isMock,
   attentionNudge = false,
-  onConnected,
   onDisconnected,
 }: KrogerConnectButtonProps) {
-  const [status, setStatus] = useState<ConnectStatus>(() =>
-    !isConnected ? "idle" : isMock ? "mock" : "connected",
-  )
+  const [status, setStatus] = useState<ConnectStatus>(() => (!isConnected ? "idle" : "connected"))
   const [disconnecting, setDisconnecting] = useState(false)
   const [connectHint, setConnectHint] = useState<string | null>(null)
+  /** Shown after a failed start (cleared on the next connect attempt). */
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   useEffect(() => {
-    setStatus(!isConnected ? "idle" : isMock ? "mock" : "connected")
-  }, [isConnected, isMock])
+    setStatus(!isConnected ? "idle" : "connected")
+  }, [isConnected])
 
   async function handleConnect() {
     if (status !== "idle") return
     setStatus("loading")
+    setConnectError(null)
     setConnectHint("Preparing secure Kroger handoff...")
 
     try {
       const result = await startKrogerConnect()
-
-      if (result.kind === "mock") {
-        setStatus("mock")
-        onConnected()
-        return
-      }
 
       if (result.kind === "redirect") {
         return
       }
 
       setStatus("idle")
-      setConnectHint("Could not start connect flow.")
+      setConnectHint(null)
+      if (result.kind === "unauthorized") {
+        setConnectError("Sign in to connect your Kroger account.")
+        return
+      }
+      const detail = result.message?.trim()
+      setConnectError(detail || "Could not start connect flow.")
     } catch {
       setStatus("idle")
-      setConnectHint("Network issue while connecting.")
+      setConnectHint(null)
+      setConnectError("Network issue while connecting.")
     }
   }
 
@@ -66,21 +64,20 @@ export function KrogerConnectButton({
       await onDisconnected()
       setStatus("idle")
       localStorage.removeItem("cravecart_kroger_connected")
-      localStorage.removeItem("cravecart_kroger_mock")
       clearKrogerConnectRedirectPending()
     } finally {
       setDisconnecting(false)
     }
   }
 
-  const connected = status === "connected" || status === "mock"
+  const connected = status === "connected"
 
   if (connected) {
     return (
       <div className="flex max-w-[min(100%,380px)] items-center gap-2 sm:gap-3">
         <div
           role="status"
-          aria-label={status === "mock" ? "Kroger mock mode active" : "Kroger connected"}
+          aria-label="Kroger connected"
           className={cn(
             "flex min-w-0 flex-1 items-center gap-2 rounded-full border border-green-500/25 bg-green-500/10 px-3 py-1.5 text-sm text-green-300",
             "shadow-[0_0_18px_rgba(34,197,94,0.14)] transition-shadow duration-1000",
@@ -90,9 +87,7 @@ export function KrogerConnectButton({
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-50" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-green-400" />
           </span>
-          <span className="hidden truncate sm:inline text-[13px] font-medium">
-            {status === "mock" ? "Kroger (mock)" : "Kroger connected"}
-          </span>
+          <span className="hidden truncate sm:inline text-[13px] font-medium">Kroger connected</span>
         </div>
         <button
           type="button"
@@ -138,7 +133,12 @@ export function KrogerConnectButton({
         )}
         <span className="hidden sm:inline">{status === "loading" ? "Connecting…" : "Connect Kroger"}</span>
       </button>
-      {status === "loading" && connectHint ? <p className="text-[10px] text-white/35">{connectHint}</p> : null}
+      {status === "loading" && connectHint ? (
+        <p className="text-[10px] text-white/35">{connectHint}</p>
+      ) : null}
+      {status === "idle" && connectError ? (
+        <p className="max-w-[min(100%,280px)] text-right text-[10px] leading-snug text-amber-200/75">{connectError}</p>
+      ) : null}
     </div>
   )
 }

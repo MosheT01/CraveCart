@@ -13,6 +13,7 @@
 # - Grant the Cloud Run runtime SA (default compute) roles/secretmanager.secretAccessor
 #   on each secret you reference below.
 # - Create secrets: GEMINI_API_KEY, YOUTUBE_API_KEY, KROGER_CLIENT_ID, KROGER_CLIENT_SECRET,
+#   SUPADATA_API_KEY (recommended for native public-video captions),
 #   INTERNAL_SIDECAR_SECRET (shared with Fly Kroger MCP; never expose to browsers),
 #   FIREBASE_SERVICE_ACCOUNT_JSON (full service account JSON as one blob),
 #   FIREBASE_WEB_API_KEY (Firebase web API key — restrict domains in Firebase console).
@@ -134,7 +135,7 @@ steps:
           --memory 512Mi \
           --min-instances 0 \
           --max-instances 1 \
-          --set-secrets YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest
+          --set-secrets YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,SUPADATA_API_KEY=SUPADATA_API_KEY:latest
         PN=$$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id")
         gcloud run services add-iam-policy-binding cravecart-youtube-mcp \
           --region "us-central1" \

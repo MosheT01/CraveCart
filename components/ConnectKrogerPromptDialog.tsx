@@ -21,7 +21,6 @@ import {
 interface ConnectKrogerPromptDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onConnected: () => void
   /** Bump parent UI (e.g. nudge Kroger chip) once dismiss is persisted */
   afterDismissPersist: () => void
 }
@@ -29,15 +28,10 @@ interface ConnectKrogerPromptDialogProps {
 export function ConnectKrogerPromptDialog({
   open,
   onOpenChange,
-  onConnected,
   afterDismissPersist,
 }: ConnectKrogerPromptDialogProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  function closeWithoutSavingDismiss() {
-    onOpenChange(false)
-  }
 
   function userDismissed() {
     if (typeof window !== "undefined") {
@@ -52,14 +46,6 @@ export function ConnectKrogerPromptDialog({
     setError(null)
     try {
       const result = await startKrogerConnect()
-      if (result.kind === "mock") {
-        if (typeof window !== "undefined") {
-          clearKrogerConnectPromptDismissed(sessionStorage)
-        }
-        onConnected()
-        closeWithoutSavingDismiss()
-        return
-      }
       if (result.kind === "redirect") {
         if (typeof window !== "undefined") {
           clearKrogerConnectPromptDismissed(sessionStorage)

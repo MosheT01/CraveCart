@@ -23,10 +23,14 @@ from youtube_transcript_api._errors import (
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+SUPADATA_TRANSCRIPT_URL = "https://api.supadata.ai/v1/transcript"
 TRANSCRIPT_PROBE_LIMIT = 5
 TRANSCRIPT_LANGUAGES = ["en", "en-US", "en-GB"]
 TRANSCRIPT_CACHE_TTL_SECONDS = 15 * 60
 TRANSCRIPT_PROBE_CACHE_TTL_SECONDS = 10 * 60
+TRANSCRIPT_TRANSIENT_CACHE_TTL_SECONDS = 60
+SUPADATA_POLL_INTERVAL_SECONDS = 1.0
+SUPADATA_POLL_TIMEOUT_SECONDS = 30.0
 
 _transcript_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _transcript_probe_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -38,6 +42,10 @@ def env(name: str, fallback: str = "") -> str:
 
 def is_configured() -> bool:
     return bool(env("YOUTUBE_API_KEY"))
+
+
+def is_supadata_configured() -> bool:
+    return bool(env("SUPADATA_API_KEY"))
 
 
 def parse_iso_duration_to_seconds(value: str | None) -> int:
@@ -156,6 +164,13 @@ def cache_set(
     return payload
 
 
+def cache_ttl_for_payload(success_ttl_seconds: int, payload: dict[str, Any]) -> int:
+    status = payload.get("transcriptStatus")
+    if status in {"blocked", "error"}:
+        return TRANSCRIPT_TRANSIENT_CACHE_TTL_SECONDS
+    return success_ttl_seconds
+
+
 def build_transcript_error_payload(error: Exception) -> dict[str, Any]:
     if isinstance(error, (RequestBlocked, IpBlocked)):
         return {
@@ -196,6 +211,16 @@ def youtube_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
     return response.json()
+
+
+def supadata_get(path: str = "", params: dict[str, Any] | None = None) -> requests.Response:
+    response = requests.get(
+        f"{SUPADATA_TRANSCRIPT_URL}{path}",
+        params=params or None,
+        headers={"x-api-key": env("SUPADATA_API_KEY")},
+        timeout=60,
+    )
+    return response
 
 
 def normalize_query(query: str) -> str:
@@ -327,19 +352,192 @@ def probe_transcript(video_id: str) -> dict[str, Any]:
     try:
         transcript_list = YouTubeTranscriptApi().list(video_id)
         transcript_list.find_transcript(TRANSCRIPT_LANGUAGES)
+        payload = {
+            "ok": True,
+            "transcriptAvailable": True,
+            "transcriptStatus": "available",
+        }
         return cache_set(
             _transcript_probe_cache,
             video_id,
-            TRANSCRIPT_PROBE_CACHE_TTL_SECONDS,
-            {
-                "ok": True,
-                "transcriptAvailable": True,
-                "transcriptStatus": "available",
-            },
+            cache_ttl_for_payload(TRANSCRIPT_PROBE_CACHE_TTL_SECONDS, payload),
+            payload,
         )
     except Exception as error:
         payload = build_transcript_error_payload(error)
-        return cache_set(_transcript_probe_cache, video_id, TRANSCRIPT_PROBE_CACHE_TTL_SECONDS, payload)
+        return cache_set(
+            _transcript_probe_cache,
+            video_id,
+            cache_ttl_for_payload(TRANSCRIPT_PROBE_CACHE_TTL_SECONDS, payload),
+            payload,
+        )
+
+
+def build_supadata_unavailable_payload(message: str = "Transcript unavailable for this video.") -> dict[str, Any]:
+    return {
+        "ok": False,
+        "transcriptAvailable": False,
+        "transcriptStatus": "unavailable",
+        "message": message,
+    }
+
+
+def build_supadata_error_payload(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "transcriptAvailable": False,
+        "transcriptStatus": "error",
+        "message": message,
+    }
+
+
+def build_supadata_transcript_payload(data: dict[str, Any]) -> dict[str, Any]:
+    content = data.get("content")
+
+    if isinstance(content, list):
+        text = " ".join(
+            str(chunk.get("text", "")).strip()
+            for chunk in content
+            if isinstance(chunk, dict) and chunk.get("text")
+        )
+    else:
+        text = str(content or "")
+
+    cleaned = clean_transcript(text)
+    if not cleaned:
+        return build_supadata_error_payload("Supadata returned an empty transcript.")
+
+    return {
+        "ok": True,
+        "transcriptAvailable": True,
+        "transcriptStatus": "available",
+        "wordCount": len(cleaned.split()),
+        "transcript": cleaned[:16000],
+    }
+
+
+def poll_supadata_transcript_job(job_id: str) -> dict[str, Any]:
+    deadline = time.monotonic() + SUPADATA_POLL_TIMEOUT_SECONDS
+
+    while time.monotonic() < deadline:
+        response = supadata_get(f"/{job_id}")
+        if response.status_code >= 400:
+            return build_supadata_error_payload(
+                f"Supadata transcript job failed with HTTP {response.status_code}."
+            )
+
+        data = response.json()
+        status = str(data.get("status") or "").lower()
+
+        if status == "completed":
+            result = data.get("result")
+            if isinstance(result, dict):
+                return build_supadata_transcript_payload(result)
+            return build_supadata_transcript_payload(data)
+
+        if status == "failed":
+            error_message = data.get("error")
+            if isinstance(error_message, dict):
+                error_message = error_message.get("message") or error_message.get("details")
+            return build_supadata_error_payload(
+                str(error_message or "Supadata transcript job failed.")
+            )
+
+        time.sleep(SUPADATA_POLL_INTERVAL_SECONDS)
+
+    return build_supadata_error_payload("Supadata transcript job timed out.")
+
+
+def try_fetch_supadata_transcript_payload(video_id: str) -> tuple[dict[str, Any] | None, bool]:
+    if not is_supadata_configured():
+        return None, False
+
+    response = supadata_get(
+        params={
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "mode": "native",
+            "text": "true",
+        }
+    )
+
+    if response.status_code == 200:
+        return build_supadata_transcript_payload(response.json()), False
+
+    if response.status_code == 202:
+        job_id = str((response.json() or {}).get("jobId") or "").strip()
+        if not job_id:
+            return build_supadata_error_payload("Supadata returned an empty transcript job id."), False
+        return poll_supadata_transcript_job(job_id), False
+
+    if response.status_code == 206:
+        return build_supadata_unavailable_payload(), False
+
+    if response.status_code in {401, 403}:
+        return (
+            build_supadata_error_payload(
+                f"Supadata transcript API rejected the request with HTTP {response.status_code}."
+            ),
+            False,
+        )
+
+    if response.status_code == 404:
+        return build_supadata_unavailable_payload(), False
+
+    if response.status_code == 429:
+        return (
+            build_supadata_error_payload(
+                "Supadata transcript API rate limit exceeded. Falling back to direct YouTube retrieval."
+            ),
+            True,
+        )
+
+    return (
+        build_supadata_error_payload(
+            f"Supadata transcript API failed with HTTP {response.status_code}."
+        ),
+        True,
+    )
+
+
+def fetch_youtube_transcript_payload(video_id: str) -> dict[str, Any]:
+    try:
+        transcript = YouTubeTranscriptApi().fetch(video_id, languages=TRANSCRIPT_LANGUAGES)
+        text = " ".join(part.text for part in transcript)
+        cleaned = clean_transcript(text)
+        if not cleaned:
+            return {
+                "ok": False,
+                "transcriptAvailable": False,
+                "transcriptStatus": "error",
+                "message": "Could not retrieve the transcript right now.",
+            }
+
+        return {
+            "ok": True,
+            "transcriptAvailable": True,
+            "transcriptStatus": "available",
+            "wordCount": len(cleaned.split()),
+            "transcript": cleaned[:16000],
+        }
+    except Exception as error:
+        return build_transcript_error_payload(error)
+
+
+def merge_transcript_failures(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    primary_message = str(primary.get("message") or "").strip()
+    fallback_message = str(fallback.get("message") or "").strip()
+
+    if primary_message and fallback_message and fallback_message != primary_message:
+        message = f"{primary_message} {fallback_message}"
+    else:
+        message = primary_message or fallback_message or "Could not retrieve the transcript right now."
+
+    return {
+        "ok": False,
+        "transcriptAvailable": False,
+        "transcriptStatus": primary.get("transcriptStatus") or fallback.get("transcriptStatus") or "error",
+        "message": message,
+    }
 
 
 def fetch_transcript_payload(video_id: str) -> dict[str, Any]:
@@ -347,29 +545,25 @@ def fetch_transcript_payload(video_id: str) -> dict[str, Any]:
     if cached:
         return cached
 
-    try:
-        transcript = YouTubeTranscriptApi().fetch(video_id, languages=TRANSCRIPT_LANGUAGES)
-        text = " ".join(part.text for part in transcript)
-        cleaned = clean_transcript(text)
-        if not cleaned:
-            payload = {
-                "ok": False,
-                "transcriptAvailable": False,
-                "transcriptStatus": "error",
-                "message": "Could not retrieve the transcript right now.",
-            }
+    payload: dict[str, Any]
+    supadata_payload, can_fallback = try_fetch_supadata_transcript_payload(video_id)
+    if supadata_payload and (supadata_payload.get("ok") or not can_fallback):
+        payload = supadata_payload
+    else:
+        youtube_payload = fetch_youtube_transcript_payload(video_id)
+        if youtube_payload.get("ok"):
+            payload = youtube_payload
+        elif supadata_payload:
+            payload = merge_transcript_failures(supadata_payload, youtube_payload)
         else:
-            payload = {
-                "ok": True,
-                "transcriptAvailable": True,
-                "transcriptStatus": "available",
-                "wordCount": len(cleaned.split()),
-                "transcript": cleaned[:16000],
-            }
-    except Exception as error:
-        payload = build_transcript_error_payload(error)
+            payload = youtube_payload
 
-    return cache_set(_transcript_cache, video_id, TRANSCRIPT_CACHE_TTL_SECONDS, payload)
+    return cache_set(
+        _transcript_cache,
+        video_id,
+        cache_ttl_for_payload(TRANSCRIPT_CACHE_TTL_SECONDS, payload),
+        payload,
+    )
 
 
 def get_video_detail(video_id: str) -> dict[str, Any]:
@@ -476,6 +670,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "configured": is_configured(),
+        "supadataConfigured": is_supadata_configured(),
     }
 
 

@@ -506,7 +506,7 @@ function buildSavedVideoContextPrompt(input: {
   transcriptAvailable: boolean
   transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
   transcriptMessage?: string
-  recipeSource: "youtube_transcript" | "fallback_recipe" | "none"
+  recipeSource: "youtube_transcript" | "fallback_recipe" | "video_metadata" | "none"
   recipeText: string
 }) {
   const transcriptStatusLine =
@@ -520,6 +520,14 @@ function buildSavedVideoContextPrompt(input: {
         ? "The transcript could not be retrieved right now. Answer from the saved title and description context, and clearly say the answer is inferred from the available video metadata."
         : "The transcript was unavailable. Infer the answer from the saved video title and description context, and say that it is inferred from the available video metadata."
     : "Use the saved transcript and description context directly."
+  const recipeSourceGuidance =
+    input.recipeSource === "youtube_transcript"
+      ? "The earlier recipe context came from the saved YouTube transcript plus the video metadata."
+      : input.recipeSource === "video_metadata"
+        ? "The earlier recipe context came from the video title and description only. Do not say it came from the transcript."
+        : input.recipeSource === "fallback_recipe"
+          ? "The earlier recipe context came from CraveCart's fallback recipe, not from the YouTube transcript."
+          : "The earlier recipe source is unknown. Do not claim it came from the transcript."
 
   return [
     "Server note: answer from the saved video context already loaded in this session. Do not call any tools.",
@@ -530,7 +538,9 @@ function buildSavedVideoContextPrompt(input: {
     input.transcriptMessage ? `Transcript note: ${input.transcriptMessage}` : "",
     `Saved recipe source: ${input.recipeSource}.`,
     transcriptGuidance,
+    recipeSourceGuidance,
     `Saved context:\n${input.recipeText.slice(0, 5000)}`,
+    "If the user asks about the transcript, answer with the actual transcript status first, then explain what source the earlier recipe came from.",
     "Give a concise, direct answer to the user's question.",
   ].join("\n\n")
 }

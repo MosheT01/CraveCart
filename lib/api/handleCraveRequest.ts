@@ -42,7 +42,7 @@ export async function handleCraveRequest(input: RunCravePipelineInput, sessionId
         openCartUrl: result.cart.openCartUrl,
       },
       hiddenDetails: {
-        recipeSource: result.cart.recipeSource === "none" ? "fallback_recipe" : result.cart.recipeSource,
+        recipeSource: result.cart.recipeSource === "none" ? "video_metadata" : result.cart.recipeSource,
         unmatchedIngredients: result.cart.unmatchedIngredients,
       },
     }
