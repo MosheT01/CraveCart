@@ -45,6 +45,9 @@ substitutions:
   # When non-empty: web points Kroger MCP at Fly; Cloud Run cravecart-kroger-mcp is skipped.
   # When empty: expect Cloud Run service cravecart-kroger-mcp to exist for describe/deploy.
   _EXTERNAL_KROGER_SIDECAR_URL: ""
+  # Prefer a concrete numeric ID from CI (resolved once per workflow); avoids Fly + Cloud Run drifting when "latest"
+  # rotates between Cloud Build and the Fly secrets step (recurring MCP 403 Unauthorized).
+  _INTERNAL_SIDECAR_SECRET_VERSION: "latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -202,7 +205,7 @@ steps:
           --max-instances 1 \
           --timeout 3600 \
           --set-env-vars "NODE_ENV=production,GEMINI_MODEL=${_GEMINI_MODEL},KROGER_LOCATION_ID=${_KROGER_LOCATION_ID},YOUTUBE_SERVICE_URL=$$YT_URL,YOUTUBE_MCP_URL=$$YT_URL/mcp/,KROGER_SIDECAR_URL=$$KR_URL,KROGER_MCP_URL=$$KR_URL/mcp/,GIT_SHA=$BUILD_ID" \
-          --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest,INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest"
+          --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest,INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:${_INTERNAL_SIDECAR_SECRET_VERSION}"
     waitFor:
       - deploy-youtube-mcp
       - deploy-kroger-mcp
