@@ -51,9 +51,11 @@ else
 fi
 
 read_sm_required() {
-  local name="$1" out
-  if ! out="$(gcloud secrets versions access latest --secret="$name" --project="$GCP_PROJECT" 2>/dev/null)"; then
-    echo "Could not read required Secret Manager secret $name (check IAM roles/secretmanager.secretAccessor for this CI identity)." >&2
+  local name="$1"
+  local ver="${2:-latest}"
+  local out
+  if ! out="$(gcloud secrets versions access "$ver" --secret="$name" --project="$GCP_PROJECT" 2>/dev/null)"; then
+    echo "Could not read required Secret Manager secret $name version $ver (check IAM roles/secretmanager.secretAccessor for this CI identity)." >&2
     return 1
   fi
   printf '%s' "$out"
@@ -64,9 +66,11 @@ read_sm_optional() {
   gcloud secrets versions access latest --secret="$name" --project="$GCP_PROJECT" 2>/dev/null || true
 }
 
+INTERNAL_SIDECAR_SECRET_VERSION="${INTERNAL_SIDECAR_SECRET_VERSION:-latest}"
+
 KROGER_CLIENT_ID="$(read_sm_required KROGER_CLIENT_ID)"
 KROGER_CLIENT_SECRET="$(read_sm_required KROGER_CLIENT_SECRET)"
-INTERNAL_SIDECAR_SECRET="$(read_sm_required INTERNAL_SIDECAR_SECRET)"
+INTERNAL_SIDECAR_SECRET="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
 KROGER_LOCATION_ID="$(read_sm_optional KROGER_LOCATION_ID)"
 
 for nm in KROGER_CLIENT_ID KROGER_CLIENT_SECRET INTERNAL_SIDECAR_SECRET; do
@@ -114,7 +118,9 @@ gh_mask "$KROGER_LOCATION_ID"
 # Do not call `flyctl apps list` / `apps create` here: a deploy-scoped token
 # (`fly tokens create deploy -a MYAPP`) returns 401 for those APIs and yields a false "missing app".
 # Create the Fly app once from your laptop if needed (`flyctl launch`/`apps create`).
-echo "Applying Fly secrets (import via stdin; avoids leaking values in argv)..."
+# Machines: `secrets import` without --stage may roll VMs immediately; a second `fly deploy` rolls again.
+# Stage secrets once, then let `fly deploy` apply them so one release picks up GCP-synced env.
+echo "Applying Fly secrets (staging for next deploy — import via stdin; avoids leaking values in argv)..."
 IMPORT_LINES="$(
   KROGER_CLIENT_ID="$KROGER_CLIENT_ID" \
     KROGER_CLIENT_SECRET="$KROGER_CLIENT_SECRET" \
@@ -137,10 +143,26 @@ print(lines, end="")
 PY
 )"
 
-printf '%s' "$IMPORT_LINES" | flyctl secrets import --app "$FLY_APP"
+printf '%s' "$IMPORT_LINES" | flyctl secrets import --stage --app "$FLY_APP"
 unset IMPORT_LINES
 
 unset KROGER_CLIENT_ID KROGER_CLIENT_SECRET INTERNAL_SIDECAR_SECRET KROGER_LOCATION_ID REDIRECT_URI
 
 echo "Flying deploy (--remote-only)..."
 flyctl deploy --app "$FLY_APP" --remote-only
+
+# Bearer smoke (CI + local): confirms Fly has the same INTERNAL_SIDECAR_SECRET bytes as Cloud Run for this release.
+if [[ -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" ]]; then
+  HEALTH_BASE="$(printf '%s' "$EXTERNAL_KROGER_SIDECAR_URL" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::')"
+  SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
+  gh_mask "$SMOKE"
+  code=""
+  code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
+  unset SMOKE
+  if [[ "$code" != "200" ]]; then
+    echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200)." >&2
+    echo "Cloud Run cravecart-web may be on a different INTERNAL_SIDECAR_SECRET revision than Fly; see docs/deploy-cloud-run.md." >&2
+    exit 1
+  fi
+  echo "Fly /health bearer check OK."
+fi

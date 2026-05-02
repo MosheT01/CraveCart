@@ -18,6 +18,12 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
   const [state, setState] = useState<StartAuthState>(initialState)
 
   useEffect(() => {
+    if (state.mode === "connected") {
+      localStorage.setItem("cravecart_kroger_connected", "1")
+    }
+  }, [state.mode])
+
+  useEffect(() => {
     if (state.mode !== "loading") {
       return
     }

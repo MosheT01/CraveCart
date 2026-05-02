@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      CRAVECART_DATA_DIR: /app/.data
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
@@ -20,6 +22,8 @@ services:
     depends_on:
       - youtube-mcp
       - kroger-mcp
+    volumes:
+      - cravecart_web_data:/app/.data
     ports:
       - "3000:3000"
 
@@ -51,3 +55,4 @@ services:
 
 volumes:
   kroger_mcp_data:
+  cravecart_web_data:

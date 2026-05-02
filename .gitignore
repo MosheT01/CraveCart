@@ -20,6 +20,7 @@ dist/
 tsconfig.tsbuildinfo
 
 # Local runtime and cache data
+.data/
 .runtime/
 .tmp-*
 kroger-mcp/data/
@@ -40,3 +41,7 @@ pnpm-debug.log*
 # OS noise
 .DS_Store
 Thumbs.db
+.idea/
+.claude/
+.env
+node_modules/

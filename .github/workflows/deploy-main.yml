@@ -57,6 +57,20 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      # Pin one Secret Manager *version* ID for INTERNAL_SIDECAR_SECRET for the entire job. Cloud Build fixes that
+      # revision on cravecart-web; Fly import reads the same version. Without this, a new ":latest" between the
+      # two steps causes recurring Bearer 403 on the Kroger MCP.
+      - name: Pin INTERNAL_SIDECAR_SECRET version (Cloud Run + Fly)
+        id: sidecar_secret_version
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          RESOURCE="$(gcloud secrets versions describe latest --secret=INTERNAL_SIDECAR_SECRET --project="${GCP_PROJECT_ID}" --format='value(name)')"
+          VID="${RESOURCE##*/}"
+          echo "Pinned INTERNAL_SIDECAR_SECRET to one Secret Manager revision for this workflow run (Cloud Build + Fly)."
+          echo "version=${VID}" >> "${GITHUB_OUTPUT}"
+
       - name: Submit Cloud Build (web + youtube MCP + Artifact Registry images)
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -65,7 +79,7 @@ jobs:
           KROGER_API_HOST: ${{ secrets.KROGER_API_HOST }}
         run: |
           set -euo pipefail
-          SUBS="_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${KROGER_LOCATION_ID},_EXTERNAL_KROGER_SIDECAR_URL=${EXTERNAL_KROGER_SIDECAR_URL}"
+          SUBS="_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${KROGER_LOCATION_ID},_EXTERNAL_KROGER_SIDECAR_URL=${EXTERNAL_KROGER_SIDECAR_URL},_INTERNAL_SIDECAR_SECRET_VERSION=${{ steps.sidecar_secret_version.outputs.version }}"
           if [[ -n "${KROGER_API_HOST:-}" ]]; then
             SUBS="${SUBS},_KROGER_API_HOST=${KROGER_API_HOST}"
           fi
@@ -84,6 +98,8 @@ jobs:
           FLY_ORG: ${{ vars.FLY_ORG }}
           GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: us-central1
+          INTERNAL_SIDECAR_SECRET_VERSION: ${{ steps.sidecar_secret_version.outputs.version }}
+          EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
         run: |
           set -euo pipefail
           test -n "${FLY_API_TOKEN:-}" || { echo "Missing Actions secret FLY_API_TOKEN." >&2; exit 1; }
