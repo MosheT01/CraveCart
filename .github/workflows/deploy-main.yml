@@ -59,7 +59,8 @@ jobs:
 
       # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
       # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
-      # Uses JSON list + a small script (avoids fragile `describe latest` and gcloud list --filter / --sort-by).
+      # Uses REST access:latest (secretmanager.versions.access only) — unlike `describe`/`versions list`,
+      # WIF principals with secrets/secretAccessor-only IAM still work.
       - name: Pin INTERNAL_SIDECAR_SECRET version (Cloud Run + Fly)
         id: sidecar_secret_version
         env:
@@ -67,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           VID="$(python3 scripts/ci/pin_internal_sidecar_secret_version.py "${GCP_PROJECT_ID}")"
-          echo "Pinned INTERNAL_SIDECAR_SECRET for this workflow run to Secret Manager version: ${VID}"
+          echo "Pinned INTERNAL_SIDECAR_SECRET to one Secret Manager revision for this workflow (id not logged)."
           echo "version=${VID}" >> "${GITHUB_OUTPUT}"
 
       - name: Submit Cloud Build (web + youtube MCP + Artifact Registry images)
