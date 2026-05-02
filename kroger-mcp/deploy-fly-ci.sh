@@ -173,16 +173,41 @@ SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERS
 gh_mask "$SMOKE"
 code=""
 for attempt in 1 2 3 4 5 6; do
-  code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
+  # Match production: HTTPS to fly.dev TLS terminator + same Host path as cravecart-web outbound fetch.
+  code="$(curl -sS --http1.1 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
   [[ "$code" == "200" ]] && break
   [[ "$attempt" -eq 6 ]] || sleep 5
 done
+
+pcode=""
+if [[ "$code" != "200" ]]; then
+  echo "Public GET ${HEALTH_BASE}/health with BearerSecretManager returned HTTP ${code:-000}; checking direct Machine :8000 via fly proxy …" >&2
+  PF=$((16350 + RANDOM % 999))
+  flyctl proxy "${PF}:8000" --app "$FLY_APP" -q >/dev/null 2>&1 &
+  PPID=$!
+  sleep 22
+  for attempt in 1 2 3 4 5 6; do
+    pcode="$(curl -sS --http1.1 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "http://127.0.0.1:${PF}/health" 2>/dev/null || true)"
+    [[ "$pcode" == "200" ]] && break
+    [[ "$attempt" -eq 6 ]] || sleep 4
+  done
+  kill "${PPID}" 2>/dev/null || true
+  wait "${PPID}" 2>/dev/null || true
+fi
 unset SMOKE
 
-if [[ "$code" != "200" ]]; then
-  echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200 after retries)." >&2
-  echo "If EXTERNAL_KROGER_SIDECAR_URL is for a different host than ${FLY_HEALTH_HOST}, cravecart-web will also fail MCP calls." >&2
-  echo "If only this check fails while the slug is correct, see docs/deploy-cloud-run.md INTERNAL_SIDECAR_SECRET drift." >&2
+if [[ "$code" == "200" ]]; then
+  echo "Fly /health bearer check OK (public ingress ${HEALTH_BASE})."
+  exit 0
+fi
+
+if [[ "$pcode" == "200" ]]; then
+  echo "::error::INTERNAL_SIDECAR_SECRET verifies on the Machine (Fly WireGuard proxy localhost -> :8000 returned 200) but https://${FLY_HEALTH_HOST}/health from the runner returned HTTP ${code:-000}. cravecart-web uses the public fly.dev URL: treat this as ingress/HTTP-edge behavior until fixed, not GCP Secret Manager drift."
   exit 1
 fi
-echo "Fly /health bearer check OK (${HEALTH_BASE})."
+
+echo "Post-deploy check failed." >&2
+echo "Neither public (${code:-000}) nor WireGuard fly-proxy (${pcode:-000}) Bearer /health succeeded." >&2
+echo "That almost always means the **INTERNAL_SIDECAR_SECRET** inside Fly’s runtime ≠ the GCP Secret Manager value this script just read (INTERNAL_SIDECAR_SECRET_VERSION=${INTERNAL_SIDECAR_SECRET_VERSION:-latest}). Confirm fly secrets show a digest bump after import; re-import from SM; verify no typo in INTERNAL_SIDECAR_SECRET name." >&2
+echo "Forbidden JSON body is ONLY from middleware: token != INTERNAL_SIDECAR_SECRET (503 = secret missing)." >&2
+exit 1
