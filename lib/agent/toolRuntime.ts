@@ -103,11 +103,28 @@ interface PendingCartSelection {
 }
 
 const MIN_PRODUCT_CONFIDENCE = 0.24
+const TOOL_RETRY_MAX = 2
+const TRANSIENT_ERROR_PATTERNS = [
+  "timeout",
+  "network",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "rate limit",
+  "429",
+  "503",
+  "temporary",
+]
+
+function isTransientToolError(error: unknown): boolean {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+  return TRANSIENT_ERROR_PATTERNS.some((pattern) => errorMessage.toLowerCase().includes(pattern.toLowerCase()))
+}
 
 export class AgentToolRuntime {
   private readonly mcpClients = new AgentMcpClients()
   private readonly permissionState
   private readonly requestedServings
+  private readonly sessionState: AgentSessionState | null
   private latestArtifact: AgentArtifact | null = null
   private latestCart: CartArtifact | null = null
   private latestDish = "Groceries"
@@ -125,6 +142,7 @@ export class AgentToolRuntime {
   ) {
     this.permissionState = getMutationPermissionState(messages)
     this.requestedServings = extractRequestedServings(messages)
+    this.sessionState = initialState
 
     if (initialState) {
       this.latestArtifact = initialState.latestArtifact
@@ -315,6 +333,8 @@ export class AgentToolRuntime {
       latestExtractedRecipe: this.latestExtractedRecipe,
       pendingSelections: Array.from(this.pendingSelections.values()),
       unmatchedIngredients: Array.from(this.unmatchedIngredients),
+      userPreferences: this.sessionState?.userPreferences ?? null,
+      preferencesConfirmed: this.sessionState?.preferencesConfirmed ?? false,
     }
   }
 
@@ -469,6 +489,34 @@ export class AgentToolRuntime {
   }
 
   async execute(name: string, args: Record<string, unknown>): Promise<ToolExecutionOutcome> {
+    let lastError: unknown = null
+    let attempts = 0
+
+    while (attempts <= TOOL_RETRY_MAX) {
+      attempts += 1
+      try {
+        const outcome = await this.executeTool(name, args)
+        if (attempts > 1) {
+          return {
+            ...outcome,
+            summary: `[Retry ${attempts - 1}] ${outcome.summary}`,
+          }
+        }
+        return outcome
+      } catch (error) {
+        lastError = error
+        const isTransient = isTransientToolError(error)
+        if (!isTransient || attempts > TOOL_RETRY_MAX) {
+          break
+        }
+        await this.delay(300 * attempts)
+      }
+    }
+
+    return this.handleToolFailure(name, args, lastError)
+  }
+
+  private async executeTool(name: string, args: Record<string, unknown>): Promise<ToolExecutionOutcome> {
     switch (name) {
       case "search_youtube_videos":
         return this.searchYoutubeVideos(args)
@@ -492,6 +540,52 @@ export class AgentToolRuntime {
           summary: `Tool ${name} is not available.`,
         }
     }
+  }
+
+  private handleToolFailure(name: string, args: Record<string, unknown>, error: unknown): ToolExecutionOutcome {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const fallbackOutcome = this.getFallbackForTool(name)
+    if (fallbackOutcome) {
+      return {
+        ...fallbackOutcome,
+        summary: `[Failed after retries: ${errorMessage}] ${fallbackOutcome.summary}`,
+      }
+    }
+    return {
+      response: { ok: false, error: errorMessage, tool: name },
+      summary: `Tool ${name} failed after ${TOOL_RETRY_MAX + 1} attempts: ${errorMessage}`,
+    }
+  }
+
+  private getFallbackForTool(name: string): ToolExecutionOutcome | null {
+    switch (name) {
+      case "search_youtube_videos":
+        return {
+          response: { ok: false, message: "YouTube search unavailable. Try a different search term." },
+          summary: "YouTube search failed, returned fallback response.",
+        }
+      case "get_video_context":
+        return {
+          response: { ok: false, message: "Video context unavailable. Use search to find another video." },
+          summary: "Video context fetch failed, returned fallback response.",
+        }
+      case "search_kroger_products":
+        return {
+          response: { ok: false, message: "Kroger search unavailable. This ingredient may not be in stock." },
+          summary: "Kroger search failed for ingredient.",
+        }
+      case "add_kroger_items_to_cart":
+        return {
+          response: { ok: false, message: "Cart update failed. Please try again or reconnect Kroger." },
+          summary: "Cart mutation failed after retries.",
+        }
+      default:
+        return null
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   async close() {
