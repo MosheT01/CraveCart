@@ -1,5 +1,5 @@
 import { devLog } from "@/lib/dev"
-import { getKrogerServiceUrl, isMockKrogerMode } from "@/lib/env"
+import { getKrogerServiceUrl } from "@/lib/env"
 import type { CartAddOutcome, CartItemRequest, KrogerAuthCallbackResponse, KrogerAuthStartResponse, KrogerHealthResponse, KrogerProduct } from "@/lib/types"
 
 interface KrogerClientOptions {
@@ -9,28 +9,18 @@ interface KrogerClientOptions {
 export class KrogerClient {
   private readonly sessionId: string | null
   private readonly baseUrl: string
-  private readonly mockMode: boolean
 
   constructor(options: KrogerClientOptions = {}) {
     this.sessionId = options.sessionId ?? null
     this.baseUrl = getKrogerServiceUrl()
-    this.mockMode = isMockKrogerMode()
   }
 
   async getAuthorizationUrl(): Promise<string> {
-    if (this.mockMode) {
-      return "/"
-    }
-
     const payload = await this.post<KrogerAuthStartResponse>("/auth/start", {})
     return payload.authUrl
   }
 
   async exchangeCodeForToken(code: string, state: string): Promise<KrogerAuthCallbackResponse> {
-    if (this.mockMode) {
-      return { ok: true, connected: true, profileId: "mock-profile" }
-    }
-
     return this.post<KrogerAuthCallbackResponse>("/auth/callback", {
       code,
       state,
@@ -56,7 +46,7 @@ export class KrogerClient {
     })
 
     if (!response.ok) {
-      return { ok: false, configured: !this.mockMode, authenticated: false }
+      return { ok: false, configured: false, authenticated: false }
     }
 
     return response.json()

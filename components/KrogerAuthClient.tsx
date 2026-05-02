@@ -6,7 +6,7 @@ import { ArrowLeft, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface StartAuthState {
-  mode: "loading" | "connected" | "mock" | "error"
+  mode: "loading" | "connected" | "error"
   message?: string
 }
 
@@ -29,7 +29,6 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
     })
       .then(async (response) => {
         const payload = (await response.json()) as {
-          mockMode?: boolean
           authUrl?: string
           message?: string
         }
@@ -42,14 +41,6 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
           setState({
             mode: "error",
             message: payload.message ?? "Could not start Kroger OAuth.",
-          })
-          return
-        }
-
-        if (payload.mockMode) {
-          setState({
-            mode: "mock",
-            message: "Kroger auth is not required while mock mode is enabled.",
           })
           return
         }
@@ -100,18 +91,6 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
           <div className="mt-8 space-y-4">
             <h1 className="text-3xl font-semibold">Kroger connected</h1>
             <p className="text-sm text-white/70">Return home and rerun the craving to push items into the live cart.</p>
-            <Link href="/">
-              <Button className="rounded-full bg-primary px-6 text-primary-foreground hover:bg-primary/90">
-                Back to home
-              </Button>
-            </Link>
-          </div>
-        ) : null}
-
-        {state.mode === "mock" ? (
-          <div className="mt-8 space-y-4">
-            <h1 className="text-3xl font-semibold">Mock mode is active</h1>
-            <p className="text-sm text-white/70">{state.message}</p>
             <Link href="/">
               <Button className="rounded-full bg-primary px-6 text-primary-foreground hover:bg-primary/90">
                 Back to home

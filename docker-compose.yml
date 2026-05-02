@@ -12,10 +12,9 @@ services:
       KROGER_CLIENT_SECRET: ${KROGER_CLIENT_SECRET:-}
       KROGER_REDIRECT_URI: ${KROGER_REDIRECT_URI:-http://localhost:3000/auth/kroger/callback}
       KROGER_LOCATION_ID: ${KROGER_LOCATION_ID:-}
-      KROGER_MOCK_MODE: ${KROGER_MOCK_MODE:-true}
-      YOUTUBE_MCP_URL: http://youtube-mcp:8100/mcp
+      YOUTUBE_MCP_URL: http://youtube-mcp:8100/mcp/
       YOUTUBE_SERVICE_URL: http://youtube-mcp:8100
-      KROGER_MCP_URL: http://kroger-mcp:8000/mcp
+      KROGER_MCP_URL: http://kroger-mcp:8000/mcp/
       KROGER_SIDECAR_URL: http://kroger-mcp:8000
     depends_on:
       - youtube-mcp
@@ -41,7 +40,6 @@ services:
       KROGER_CLIENT_SECRET: ${KROGER_CLIENT_SECRET:-}
       KROGER_REDIRECT_URI: ${KROGER_REDIRECT_URI:-http://localhost:3000/auth/kroger/callback}
       KROGER_LOCATION_ID: ${KROGER_LOCATION_ID:-}
-      KROGER_MOCK_MODE: ${KROGER_MOCK_MODE:-true}
     volumes:
       - kroger_mcp_data:/app/data
     ports:
