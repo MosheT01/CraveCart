@@ -18,6 +18,8 @@ if [[ -z "${FLY_APP:-}" ]]; then
     exit 1
   fi
 fi
+# Normalize slug (GH Actions secrets may store a trailing newline; breaks https://slug.fly.dev).
+FLY_APP="$(printf '%s' "$FLY_APP" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
 WEB_URL="${WEB_URL:-}"
 if [[ -z "$WEB_URL" ]]; then
@@ -152,22 +154,35 @@ unset KROGER_CLIENT_ID KROGER_CLIENT_SECRET INTERNAL_SIDECAR_SECRET KROGER_LOCAT
 echo "Flying deploy (--remote-only)..."
 flyctl deploy --app "$FLY_APP" --remote-only
 
-# Bearer smoke (CI + local): confirms Fly has the same INTERNAL_SIDECAR_SECRET bytes as Cloud Run for this release.
+# Bearer smoke: probes the SAME app slug we deployed. Do NOT use EXTERNAL_KROGER_SIDECAR_URL here — Actions often
+# store a typo/path vs FLY_APP (e.g. wrong slug or .../mcp), which yields 403 even when Fly vault matches GCP.
+readonly FLY_HEALTH_HOST="$(printf '%s' "$FLY_APP" | tr '[:upper:]' '[:lower:]').fly.dev"
+readonly HEALTH_BASE="https://${FLY_HEALTH_HOST}"
+
 if [[ -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" ]]; then
-  HEALTH_BASE="$(printf '%s' "$EXTERNAL_KROGER_SIDECAR_URL" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::')"
-  SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
-  gh_mask "$SMOKE"
-  code=""
-  for attempt in 1 2 3 4 5 6; do
-    code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
-    [[ "$code" == "200" ]] && break
-    [[ "$attempt" -eq 6 ]] || sleep 5
-  done
-  unset SMOKE
-  if [[ "$code" != "200" ]]; then
-    echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200 after retries)." >&2
-    echo "Confirm EXTERNAL_KROGER_SIDECAR_URL matches this Fly app. If GCP/Fly payloads diverge, see docs/deploy-cloud-run.md." >&2
-    exit 1
+  ext="$(printf '%s' "$EXTERNAL_KROGER_SIDECAR_URL" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  ext="${ext#https://}"
+  ext="${ext#http://}"
+  ext="$(printf '%s' "$ext" | cut -d/ -f1 | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$ext" && "$ext" == *fly.dev* && "$ext" != "$FLY_HEALTH_HOST" && -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::warning::EXTERNAL_KROGER_SIDECAR_URL host (${ext}) differs from deployed app (${FLY_HEALTH_HOST}). Cloud Build URL for web stays EXTERNAL_*; Fly smoke uses ${FLY_HEALTH_HOST}. Fix EXTERNAL_* or FLY_APP_NAME alignment."
   fi
-  echo "Fly /health bearer check OK."
 fi
+
+SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
+gh_mask "$SMOKE"
+code=""
+for attempt in 1 2 3 4 5 6; do
+  code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
+  [[ "$code" == "200" ]] && break
+  [[ "$attempt" -eq 6 ]] || sleep 5
+done
+unset SMOKE
+
+if [[ "$code" != "200" ]]; then
+  echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200 after retries)." >&2
+  echo "If EXTERNAL_KROGER_SIDECAR_URL is for a different host than ${FLY_HEALTH_HOST}, cravecart-web will also fail MCP calls." >&2
+  echo "If only this check fails while the slug is correct, see docs/deploy-cloud-run.md INTERNAL_SIDECAR_SECRET drift." >&2
+  exit 1
+fi
+echo "Fly /health bearer check OK (${HEALTH_BASE})."

@@ -99,6 +99,7 @@ jobs:
           GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           GCP_REGION: us-central1
           INTERNAL_SIDECAR_SECRET_VERSION: ${{ steps.sidecar_secret_version.outputs.version }}
+          # Unused for probing /health — deploy-fly-ci.sh uses https://${FLY_APP}.fly.dev — kept for mismatch warnings vs Cloud Build.
           EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
         run: |
           set -euo pipefail
