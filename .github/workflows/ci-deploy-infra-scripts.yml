@@ -24,6 +24,9 @@ jobs:
       - name: Bash syntax — deploy-fly-ci.sh
         run: bash -n kroger-mcp/deploy-fly-ci.sh
 
+      - name: Python syntax — pin_internal_sidecar_secret_version.py
+        run: python3 -m py_compile scripts/ci/pin_internal_sidecar_secret_version.py
+
       - name: Parse workflow YAML
         run: |
           ruby -ryaml -e "YAML.safe_load(File.read('.github/workflows/deploy-main.yml')); puts 'deploy-main.yml: OK'"

@@ -59,26 +59,14 @@ jobs:
 
       # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
       # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
-      # Use `versions list` (latest ENABLED), not `versions describe latest` (fragile vs gcloud/access semantics).
+      # Uses JSON list + a small script (avoids fragile `describe latest` and gcloud list --filter / --sort-by).
       - name: Pin INTERNAL_SIDECAR_SECRET version (Cloud Run + Fly)
         id: sidecar_secret_version
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          NAME="$(
-            gcloud secrets versions list INTERNAL_SIDECAR_SECRET \
-              --project="${GCP_PROJECT_ID}" \
-              --filter="state=ENABLED" \
-              --sort-by="~createTime" \
-              --limit=1 \
-              --format="value(name)"
-          )"
-          if [[ -z "${NAME:-}" ]]; then
-            echo "No ENABLED Secret Manager version found for INTERNAL_SIDECAR_SECRET (create the secret / enable a version)." >&2
-            exit 1
-          fi
-          VID="${NAME##*/}"
+          VID="$(python3 scripts/ci/pin_internal_sidecar_secret_version.py "${GCP_PROJECT_ID}")"
           echo "Pinned INTERNAL_SIDECAR_SECRET for this workflow run to Secret Manager version: ${VID}"
           echo "version=${VID}" >> "${GITHUB_OUTPUT}"
 
