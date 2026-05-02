@@ -2,6 +2,7 @@ import { runAgentTurn } from "@/lib/agent/runAgentTurn"
 import { chatRequestSchema } from "@/lib/agent/schemas"
 import { getSessionUser } from "@/lib/server/auth/getSessionUser"
 import { ensureSessionId } from "@/lib/kroger/session"
+import { syncKrogerBrowserSessionForUser } from "@/lib/server/krogerSessionSync"
 
 export const runtime = "nodejs"
 
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
     )
   }
 
+  await syncKrogerBrowserSessionForUser(authedUser.id)
   const sessionId = await ensureSessionId()
 
   const stream = new ReadableStream({

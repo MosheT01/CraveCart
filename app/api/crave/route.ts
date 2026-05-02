@@ -3,6 +3,7 @@ import { handleCraveRequest } from "@/lib/api/handleCraveRequest"
 import { craveRequestSchema } from "@/lib/llm/schemas"
 import { getSessionUser } from "@/lib/server/auth/getSessionUser"
 import { ensureSessionId } from "@/lib/kroger/session"
+import { syncKrogerBrowserSessionForUser } from "@/lib/server/krogerSessionSync"
 
 export async function POST(request: Request) {
   const user = await getSessionUser()
@@ -12,6 +13,7 @@ export async function POST(request: Request) {
 
   try {
     const payload = craveRequestSchema.parse(await request.json())
+    await syncKrogerBrowserSessionForUser(user.id)
     const sessionId = await ensureSessionId()
     const response = await handleCraveRequest(payload, sessionId)
     return NextResponse.json(response)

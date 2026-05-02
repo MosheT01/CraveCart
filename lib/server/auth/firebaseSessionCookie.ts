@@ -1,5 +1,6 @@
 import { cookies } from "next/headers"
 
+import { useSecureSessionCookies } from "@/lib/env"
 import type { PublicUser } from "@/lib/server/auth/publicUser"
 import { firebaseAdminConfigured, getFirebaseAdminAuth } from "@/lib/server/firebase/admin"
 
@@ -12,18 +13,19 @@ export function firebaseSessionCookieOptions() {
   return {
     httpOnly: true as const,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureSessionCookies(),
     path: "/",
     maxAge: Math.floor(WEEK_MS / 1000),
   }
 }
 
-export async function setFirebaseSessionCookieFromIdToken(idToken: string): Promise<void> {
+export async function setFirebaseSessionCookieFromIdToken(idToken: string): Promise<{ uid: string }> {
   const auth = getFirebaseAdminAuth()
-  await auth.verifyIdToken(idToken)
+  const decoded = await auth.verifyIdToken(idToken)
   const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn: WEEK_MS })
   const cookieStore = await cookies()
   cookieStore.set(FIREBASE_SESSION_COOKIE, sessionCookie, firebaseSessionCookieOptions())
+  return { uid: decoded.uid }
 }
 
 export async function clearFirebaseSessionCookie(): Promise<void> {

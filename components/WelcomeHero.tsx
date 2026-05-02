@@ -16,12 +16,6 @@ const FLOATERS = [
   { emoji: "🫕", style: { top: "12%",  right: "44%", fontSize: "1.6rem", animationDuration: "7.1s", animationDelay: "3.5s" } },
 ]
 
-const STATS = [
-  { icon: "🎬", label: "Recipe videos" },
-  { icon: "🛒", label: "Live cart writes" },
-  { icon: "⚡", label: "Gemini powered" },
-]
-
 const CATEGORIES = [
   { emoji: "🍕", label: "Pizza",    query: "Find a homemade pizza recipe video and buy the groceries" },
   { emoji: "🍔", label: "Burgers",  query: "Find a smash burger recipe video and buy the ingredients" },
@@ -35,10 +29,11 @@ const CATEGORIES = [
 
 interface WelcomeHeroProps {
   onSelectCategory: (query: string) => void
-  krogerConnected: boolean
+  /** When false, chips are gated (logged-out previews). Signed-in users can chat either way — link Kroger for cart. */
+  agentChatEnabled: boolean
 }
 
-export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroProps) {
+export function WelcomeHero({ onSelectCategory, agentChatEnabled }: WelcomeHeroProps) {
   return (
     <div className="relative w-full max-w-3xl">
       {/* ── Floating food emojis (desktop only) ─────────────────────────── */}
@@ -52,7 +47,7 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
             className="absolute select-none"
             style={{
               ...f.style,
-              opacity: 0.09,
+              opacity: 0.055,
               animation: `food-float ${f.style.animationDuration} ease-in-out ${f.style.animationDelay} infinite`,
             }}
           >
@@ -62,79 +57,56 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
       </div>
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
-      <div className="relative flex flex-col items-center gap-8 py-10 text-center">
+      <div className="relative flex flex-col items-center gap-7 py-6 text-center md:gap-8 md:py-8">
 
-        {/* Tagline */}
-        <div className="space-y-3" style={{ animation: "fade-in-up 0.55s ease-out both" }}>
-          <p className="text-[10px] uppercase tracking-[0.32em] text-white/28">
+        {/* Tagline — single focal block */}
+        <div className="max-w-xl space-y-2.5" style={{ animation: "fade-in-up 0.55s ease-out both" }}>
+          <p className="text-[10px] uppercase tracking-[0.3em] text-white/26">
             Your personal food agent
           </p>
 
-          <h2 className="text-[2.6rem] font-bold leading-[1.12] tracking-tight md:text-[3.2rem]">
-            <span className="bg-gradient-to-r from-white via-white/95 to-white/70 bg-clip-text text-transparent">
+          <h2 className="text-balance text-[clamp(2rem,6vw,2.85rem)] font-bold leading-[1.08] tracking-tight">
+            <span className="bg-gradient-to-r from-white via-white/95 to-white/75 bg-clip-text text-transparent">
               From craving
-            </span>
-            <br />
-            <span className="bg-gradient-to-br from-primary via-primary/85 to-primary/55 bg-clip-text text-transparent">
+            </span>{" "}
+            <span className="bg-gradient-to-br from-primary via-primary/88 to-primary/55 bg-clip-text text-transparent">
               to cart
             </span>
-            <span
-              className="text-white/38"
-              style={{ fontWeight: 300 }}
-            >
-              {" "}— in seconds.
+            <span className="text-white/34" style={{ fontWeight: 400 }}>
+              {" "}
+              — in seconds.
             </span>
           </h2>
 
-          <p className="mx-auto max-w-sm text-[14px] leading-relaxed text-white/38">
-            Describe a dish, paste a video link, or just say "buy groceries" — the agent handles everything live.
+          <p className="mx-auto max-w-md text-[13px] leading-relaxed text-white/36 md:text-[14px]">
+            Describe a craving or paste a link — recipes, carts, and checkout stay threaded in chat.
           </p>
         </div>
 
-        {/* Stat labels — informational only, not interactive */}
-        <div
-          className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1"
-          style={{ animation: "fade-in-up 0.55s ease-out 0.14s both" }}
-          aria-label="Agent capabilities"
-        >
-          {STATS.map((s, i) => (
-            <span key={s.label} className="flex items-center gap-1.5 select-none">
-              <span className="text-[12px] leading-none" aria-hidden="true">{s.icon}</span>
-              <span className="text-[11px] text-white/30">{s.label}</span>
-              {i < STATS.length - 1 && (
-                <span className="ml-4 text-white/12 text-[10px]" aria-hidden="true">·</span>
-              )}
-            </span>
-          ))}
-        </div>
-
-        {/* Category chips — horizontal scroll */}
-        <div
-          className="w-full"
-          style={{ animation: "fade-in-up 0.55s ease-out 0.26s both" }}
-        >
-          <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-white/22">
-            Quick picks
+        {/* Category chips */}
+        <div className="w-full max-w-2xl" style={{ animation: "fade-in-up 0.55s ease-out 0.12s both" }}>
+          <p className="mb-2.5 text-center text-[10px] uppercase tracking-[0.2em] text-white/26">
+            Try a craving
           </p>
 
-          <div className="scrollbar-none flex gap-2 overflow-x-auto pb-0.5">
+          <div className="scrollbar-none mx-auto flex max-w-full gap-2 overflow-x-auto px-1 pb-1 md:flex-wrap md:justify-center md:overflow-visible md:pb-0">
             {CATEGORIES.map((cat) => (
               <button
                 key={cat.label}
                 type="button"
                 onClick={() => onSelectCategory(cat.query)}
-                disabled={!krogerConnected}
-                title={krogerConnected ? cat.query : "Connect Kroger first"}
+                disabled={!agentChatEnabled}
+                title={agentChatEnabled ? cat.query : "Sign in to use quick picks"}
                 className={cn(
-                  "flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-[13px] font-medium",
-                  "transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50",
-                  krogerConnected
+                  "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12.5px] font-medium md:px-3.5 md:py-2",
+                  "transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/45",
+                  agentChatEnabled
                     ? [
-                        "border-white/10 bg-white/[0.05] text-white/60",
-                        "hover:border-primary/35 hover:bg-primary/10 hover:text-white/90",
-                        "active:scale-95",
+                        "border-white/[0.09] bg-white/[0.04] text-white/58",
+                        "hover:border-primary/32 hover:bg-primary/[0.09] hover:text-white/88",
+                        "active:scale-[0.98]",
                       ].join(" ")
-                    : "cursor-not-allowed border-white/[0.05] bg-white/[0.02] text-white/20"
+                    : "cursor-not-allowed border-white/[0.05] bg-white/[0.02] text-white/22"
                 )}
               >
                 <span aria-hidden="true">{cat.emoji}</span>
@@ -143,11 +115,9 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
             ))}
           </div>
 
-          {!krogerConnected && (
-            <p className="mt-2 text-[11px] text-white/20">
-              Connect Kroger above to use quick picks
-            </p>
-          )}
+          {!agentChatEnabled ? (
+            <p className="mt-2 text-center text-[11px] text-white/22">Sign in to use cravings.</p>
+          ) : null}
         </div>
       </div>
     </div>

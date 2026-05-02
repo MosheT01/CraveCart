@@ -18,7 +18,7 @@ At a high level, the product promise is:
 There are three runtime services:
 
 - `web`: Next.js App Router app and Gemini agent host
-- `youtube-mcp`: Python MCP server for video search and transcript retrieval
+- `youtube-mcp`: Python MCP server for video search, transcript probing, and native-caption retrieval
 - `kroger-mcp`: Python MCP server for Kroger search, OAuth session state, and cart writes
 
 The browser only talks to `web`. `web` is the only public application surface the user needs. The MCP services are backend-only dependencies.
@@ -78,7 +78,8 @@ flowchart LR
     W --> YM["youtube-mcp"]
     W --> KM["kroger-mcp"]
     YM --> Y["YouTube Data API"]
-    YM --> T["Public caption / transcript access"]
+    YM --> S["Supadata Transcript API (native only)"]
+    YM --> T["Direct transcript probe / fallback"]
     KM --> K["Kroger APIs"]
 ```
 
@@ -140,13 +141,16 @@ This service handles:
 - YouTube search normalization
 - video candidate scoring
 - transcript probing
-- transcript retrieval
+- native transcript retrieval for the selected video
+- honest transcript status mapping (`available`, `unavailable`, `blocked`, `error`)
 - metadata packaging into MCP tool responses
 
 Important design choice:
 
 - CraveCart does not transcribe audio itself
-- it only uses public transcript access when available
+- it only uses existing captions; it does not ask Supadata to generate AI transcripts
+- it keeps search-time transcript probing cheap and local so every candidate does not consume transcript-provider credits
+- it prefers Supadata for the final selected-video fetch because direct transcript scraping is often blocked from server or cloud IPs
 - if none of the first five likely candidates expose a transcript, the system falls back to the most relevant candidate and later infers from title + description
 
 ### 4.3 `kroger-mcp`
@@ -267,6 +271,7 @@ It checks:
 - Gemini key present
 - YouTube key present
 - YouTube MCP `/health`
+- whether `youtube-mcp` reports `supadataConfigured`
 - Kroger MCP `/health`
 - whether Kroger API credentials are present in the web service env
 - whether **Firebase Admin** is configured (`firebaseConfigured`)
@@ -585,14 +590,25 @@ CraveCart does not generate transcripts itself.
 
 It relies on:
 
-- `youtube-transcript-api`
-- public subtitle access for manual or auto-generated English captions
+- `youtube-transcript-api` for low-cost transcript probing during candidate ranking
+- Supadata `/v1/transcript` with `mode=native` for selected-video retrieval
+- direct public subtitle access only as a last-resort fallback when Supadata has a transient provider failure
 
-If transcript retrieval works:
+The selected-video fetch flow is:
 
-- the transcript is cleaned and returned
+1. try Supadata in `mode=native`
+2. if Supadata returns a transcript directly, clean it and return it
+3. if Supadata returns an async job, poll until it completes or fails
+4. if Supadata says the transcript is unavailable, report that honestly and stop
+5. if Supadata transiently fails or rate-limits, try direct `youtube-transcript-api`
+6. if both paths fail, return an honest `blocked` or `error` status instead of claiming there is no transcript
 
-If it fails:
+Important constraint:
+
+- CraveCart does not call Supadata `mode=auto` or `mode=generate`
+- if YouTube already has captions, the app should use the native caption track rather than an AI-regenerated transcript
+
+If transcript retrieval still fails:
 
 - the selected video is still returned
 - the downstream system may use title + description inference
@@ -604,6 +620,7 @@ If it fails:
 
 - video metadata
 - transcript availability
+- transcript status (`available`, `unavailable`, `blocked`, `error`)
 - transcript text when available
 - transcript message when unavailable
 
@@ -875,6 +892,7 @@ Important envs:
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL`
 - `YOUTUBE_API_KEY`
+- `SUPADATA_API_KEY` — recommended; mounted into `youtube-mcp` for native public-caption retrieval
 - `KROGER_CLIENT_ID`
 - `KROGER_CLIENT_SECRET`
 - `KROGER_REDIRECT_URI`

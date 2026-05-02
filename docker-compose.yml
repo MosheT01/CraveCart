@@ -35,6 +35,7 @@ services:
       dockerfile: Dockerfile
     environment:
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
       INTERNAL_SIDECAR_SECRET: ${INTERNAL_SIDECAR_SECRET:-}
     expose:
       - "8100"

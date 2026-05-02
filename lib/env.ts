@@ -26,6 +26,16 @@ export function getAppBaseUrl(): string {
   return readEnv("APP_BASE_URL", "http://localhost:3000")
 }
 
+/**
+ * `Secure` session cookies break local Docker Compose: the image sets NODE_ENV=production while APP_BASE_URL is
+ * still http://localhost — browsers refuse Secure cookies on HTTP.
+ */
+export function useSecureSessionCookies(): boolean {
+  if (process.env.NODE_ENV !== "production") return false
+  const base = getAppBaseUrl().trim().toLowerCase()
+  return base.startsWith("https://")
+}
+
 /** Mounted MCP apps use `/mcp/`; without trailing slash Starlette redirects and can downgrade to http behind proxies. */
 function normalizeMountedMcpUrl(envName: string, defaultWithoutSlash: string): string {
   const raw = readEnv(envName, defaultWithoutSlash).replace(/\/+$/u, "")

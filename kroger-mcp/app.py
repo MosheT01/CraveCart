@@ -636,6 +636,29 @@ def auth_start(x_cravecart_session: str | None = Header(default=None)) -> dict[s
     return {"authUrl": auth_url}
 
 
+@fastapi.get("/session/status")
+def session_oauth_status(x_cravecart_session: str | None = Header(default=None)) -> dict[str, Any]:
+    session_id = require_session(x_cravecart_session)
+    return {
+        "ok": True,
+        "configured": is_configured(),
+        "authenticated": bool(get_user_token(session_id)),
+    }
+
+
+@fastapi.post("/session/clear")
+def session_clear(x_cravecart_session: str | None = Header(default=None)) -> dict[str, Any]:
+    """Remove OAuth + cart state file for this browser session (disconnect)."""
+    session_id = require_session(x_cravecart_session)
+    path = session_path(session_id)
+    if path.is_file():
+        try:
+            path.unlink()
+        except OSError as exc:  # pragma: no cover - rare fs issues
+            logger.warning("session_clear_unlink_failed: %s", exc)
+    return {"ok": True}
+
+
 @fastapi.post("/auth/callback")
 def auth_callback(payload: AuthCallbackPayload, x_cravecart_session: str | None = Header(default=None)) -> dict[str, Any]:
     session_id = require_session(x_cravecart_session)

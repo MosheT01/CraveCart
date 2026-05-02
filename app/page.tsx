@@ -1,10 +1,12 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import Link from "next/link"
 import {
   AlertCircle,
   ChevronRight,
+  CircleHelp,
   Flame,
   Loader2,
   Menu,
@@ -18,12 +20,26 @@ import { ChatInput } from "@/components/ChatInput"
 import { ChatMarkdown } from "@/components/ChatMarkdown"
 import { VideoResultCard } from "@/components/VideoResultCard"
 import { Button } from "@/components/ui/button"
+import { ConnectKrogerPromptDialog } from "@/components/ConnectKrogerPromptDialog"
 import { LoginScreen } from "@/components/LoginScreen"
+import { OnboardingOverlay } from "@/components/OnboardingOverlay"
 import { Sidebar, type ChatSession } from "@/components/Sidebar"
 import { KrogerConnectButton } from "@/components/KrogerConnectButton"
+import { buildChatMessagesForAgent, coerceReplayMessageContent } from "@/lib/chat/chatHistoryPayload"
+import {
+  needsAiChatTitle,
+  pickFirstUserMessageForSessionTitle,
+  resolvePersistedChatTitle,
+} from "@/lib/chat/sessionTitle"
+import { clearKrogerConnectRedirectPending } from "@/lib/kroger/clientStartConnect"
+import {
+  clearKrogerConnectPromptDismissed,
+  isKrogerConnectPromptDismissed,
+} from "@/lib/kroger/connectPromptSession"
+import { markFirstVisitTourSeen, shouldShowOnboardingAuto } from "@/lib/onboarding/state"
 import { cn } from "@/lib/utils"
 import { WelcomeHero } from "@/components/WelcomeHero"
-import type { AgentStreamEvent, CartArtifact, ChatMessage, ToolTraceEntry, VideoArtifact } from "@/lib/types"
+import type { AgentStreamEvent, CartArtifact, ToolTraceEntry, VideoArtifact } from "@/lib/types"
 import type { AuthUserDto } from "@/components/LoginScreen"
 
 const EXAMPLES = [
@@ -32,12 +48,6 @@ const EXAMPLES = [
   { icon: Play, text: "Tell me about a chicken Alfredo video" },
   { icon: Sparkles, text: "Find a good chicken alfredo video and buy the groceries" },
 ] as const
-
-const FEATURE_PILLS = [
-  "YouTube search & transcripts",
-  "Kroger product matching",
-  "Live cart actions",
-]
 
 interface UiMessage {
   id: string
@@ -71,7 +81,6 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const [userLoaded, setUserLoaded] = useState(false)
   const [krogerConnected, setKrogerConnected] = useState(false)
-  const [krogerIsMock, setKrogerIsMock] = useState(false)
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>([])
@@ -81,18 +90,88 @@ export default function HomePage() {
   const messagesViewportRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const latestMessagesRef = useRef<UiMessage[]>([])
+  const sessionsRef = useRef<ChatSession[]>([])
+  /** Stable sidebar titles — AI-named for new chats, or loaded from Firestore */
+  const resolvedChatTitleRef = useRef<Map<string, string>>(new Map())
+  const aiTitleRequestedRef = useRef<Set<string>>(new Set())
+
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [krogerConnectPromptOpen, setKrogerConnectPromptOpen] = useState(false)
+  /** SessionStorage mirror for header “Connect Kroger” nudge pulse */
+  const [krogerPromptDismissed, setKrogerPromptDismissed] = useState(false)
 
   useEffect(() => {
-    const pending = localStorage.getItem("cravecart_kroger_pending")
-    if (pending) {
-      localStorage.removeItem("cravecart_kroger_pending")
-      localStorage.setItem("cravecart_kroger_connected", "1")
-      setKrogerConnected(true)
-    } else if (localStorage.getItem("cravecart_kroger_connected")) {
-      setKrogerConnected(true)
-      if (localStorage.getItem("cravecart_kroger_mock")) setKrogerIsMock(true)
-    }
+    sessionsRef.current = sessions
+  }, [sessions])
 
+  useEffect(() => {
+    if (!userLoaded || typeof window === "undefined") return
+    setKrogerPromptDismissed(isKrogerConnectPromptDismissed(window.sessionStorage))
+  }, [userLoaded, user, krogerConnected])
+
+  useEffect(() => {
+    if (!userLoaded || typeof window === "undefined") return
+    if (
+      shouldShowOnboardingAuto({
+        storage: window.localStorage,
+        cookie: document.cookie,
+      })
+    ) {
+      setOnboardingOpen(true)
+    }
+  }, [userLoaded])
+
+  useEffect(() => {
+    if (!userLoaded || !user || typeof window === "undefined") return
+    if (
+      shouldShowOnboardingAuto({
+        storage: window.localStorage,
+        cookie: document.cookie,
+      })
+    ) {
+      return
+    }
+    if (krogerConnected) return
+    if (isKrogerConnectPromptDismissed(window.sessionStorage)) return
+    setKrogerConnectPromptOpen(true)
+  }, [userLoaded, user, krogerConnected])
+
+  function handleOnboardingOpenChange(open: boolean) {
+    setOnboardingOpen(open)
+    if (!open && typeof window !== "undefined") {
+      markFirstVisitTourSeen(window.localStorage)
+      // After tour, eligible users see Kroger prompt on next effect tick — open here if onboarding blocked it
+      queueMicrotask(() => {
+        if (!user || krogerConnected) return
+        if (isKrogerConnectPromptDismissed(sessionStorage)) return
+        setKrogerConnectPromptOpen(true)
+      })
+    }
+  }
+
+  async function refreshKrogerFromServer() {
+    try {
+      const r = await fetch("/api/kroger/status", { credentials: "same-origin" })
+      if (!r.ok) return
+      const d = (await r.json()) as {
+        authenticated?: boolean
+        needsFirebaseAuth?: boolean
+      }
+      if (d.needsFirebaseAuth) return
+      if (d.authenticated) {
+        clearKrogerConnectRedirectPending()
+        setKrogerConnected(true)
+        localStorage.setItem("cravecart_kroger_connected", "1")
+      } else {
+        setKrogerConnected(false)
+        localStorage.removeItem("cravecart_kroger_connected")
+      }
+    } catch {
+      // Leave prior UI state on network errors.
+    }
+  }
+
+  useEffect(() => {
     ;(async () => {
       try {
         const meRes = await fetch("/api/auth/me", { credentials: "same-origin" })
@@ -102,6 +181,7 @@ export default function HomePage() {
           setUser(authedUser)
           await loadSessionsForUser(authedUser.id)
           await migrateLocalHistoryIfNeeded()
+          await refreshKrogerFromServer()
         }
       } catch {
         // stay logged out — LoginScreen gates the app
@@ -109,18 +189,6 @@ export default function HomePage() {
         setUserLoaded(true)
       }
     })()
-
-    fetch("/api/kroger/auth/start", { method: "POST" })
-      .then((r) => r.json())
-      .then((data: { mockMode?: boolean }) => {
-        if (data.mockMode) {
-          setKrogerConnected(true)
-          setKrogerIsMock(true)
-          localStorage.setItem("cravecart_kroger_connected", "1")
-          localStorage.setItem("cravecart_kroger_mock", "1")
-        }
-      })
-      .catch(() => {})
   }, [])
 
   async function loadSessionsForUser(_userId: string) {
@@ -129,6 +197,9 @@ export default function HomePage() {
       if (!r.ok) return
       const data = (await r.json()) as { sessions?: ChatSession[] }
       const list = data.sessions ?? []
+      for (const s of list) {
+        if (s.title) resolvedChatTitleRef.current.set(s.id, s.title)
+      }
       setSessions(list)
 
       const last = sessionStorage.getItem("cravecart_active_session")
@@ -187,6 +258,9 @@ export default function HomePage() {
   }
 
   async function handleSelectSessionFromServer(id: string) {
+    const meta = sessions.find((s) => s.id === id)
+    if (meta?.title) resolvedChatTitleRef.current.set(id, meta.title)
+
     setActiveSessionId(id)
     setSidebarOpen(false)
     sessionStorage.setItem("cravecart_active_session", id)
@@ -202,7 +276,7 @@ export default function HomePage() {
           const restoredLs: UiMessage[] = stored.map((m) => ({
             id: m.id,
             role: m.role,
-            content: m.content,
+            content: coerceReplayMessageContent(m.role, m.content),
             status: "idle",
             traces: [],
             video: m.video as VideoArtifact | null,
@@ -220,7 +294,7 @@ export default function HomePage() {
       const restored: UiMessage[] = rows.map((m) => ({
         id: m.id,
         role: m.role,
-        content: m.content,
+        content: coerceReplayMessageContent(m.role, m.content),
         status: "idle",
         traces: [],
         video: m.video as VideoArtifact | null,
@@ -252,6 +326,7 @@ export default function HomePage() {
     setUser({ id: next.id, name: next.name, email: next.email })
     void loadSessionsForUser(next.id)
     void migrateLocalHistoryIfNeeded()
+    void refreshKrogerFromServer()
   }
 
   async function handleLogout() {
@@ -269,8 +344,30 @@ export default function HomePage() {
   }
 
   function handleKrogerConnected() {
+    clearKrogerConnectRedirectPending()
     setKrogerConnected(true)
     localStorage.setItem("cravecart_kroger_connected", "1")
+    if (typeof window !== "undefined") {
+      clearKrogerConnectPromptDismissed(window.sessionStorage)
+      setKrogerPromptDismissed(false)
+      setKrogerConnectPromptOpen(false)
+    }
+    void refreshKrogerFromServer()
+  }
+
+  async function handleKrogerDisconnected() {
+    await fetch("/api/kroger/disconnect", {
+      method: "POST",
+      credentials: "same-origin",
+    })
+    setKrogerConnected(false)
+    localStorage.removeItem("cravecart_kroger_connected")
+    clearKrogerConnectRedirectPending()
+    if (typeof window !== "undefined") {
+      clearKrogerConnectPromptDismissed(window.sessionStorage)
+      setKrogerPromptDismissed(false)
+      setKrogerConnectPromptOpen(true)
+    }
   }
 
   function handleNewChat() {
@@ -313,7 +410,9 @@ export default function HomePage() {
   }
 
   async function submitPrompt(prompt: string) {
-    if (isSending || !krogerConnected) return
+    if (isSending) return
+
+    const isFirstUserTurn = messages.length === 0
 
     const userMessage = makeUserMessage(prompt)
     const assistantMessage = makeAssistantPlaceholder()
@@ -324,7 +423,6 @@ export default function HomePage() {
       setActiveSessionId(sessionId)
       sessionStorage.setItem("cravecart_active_session", sessionId)
     }
-    const sessionTitle = prompt.length > 42 ? prompt.slice(0, 42) + "…" : prompt
 
     updateMessages(() => [...historyForRequest, assistantMessage])
     setIsSending(true)
@@ -334,7 +432,7 @@ export default function HomePage() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: toChatHistory(historyForRequest) }),
+        body: JSON.stringify({ messages: buildChatMessagesForAgent(historyForRequest) }),
       })
 
       if (response.status === 401) {
@@ -349,15 +447,69 @@ export default function HomePage() {
 
       await consumeEventStream(response.body, assistantMessage.id)
     } catch (error) {
-      updateAssistantMessage(assistantMessage.id, (current) => ({
-        ...current,
-        status: "error",
-        error: error instanceof Error ? error.message : "Could not reach the CraveCart agent.",
-        content: current.content || "I couldn't complete that request.",
-      }))
+      flushSync(() => {
+        updateAssistantMessage(assistantMessage.id, (current) => ({
+          ...current,
+          status: "error",
+          error: error instanceof Error ? error.message : "Could not reach the CraveCart agent.",
+          content: current.content || "I couldn't complete that request.",
+        }))
+      })
     } finally {
       setIsSending(false)
-      persistSession(sessionId, sessionTitle, latestMessagesRef.current)
+
+      const titleForSave = resolvePersistedChatTitle({
+        sessionId,
+        resolvedTitles: resolvedChatTitleRef.current,
+        sessions: sessionsRef.current,
+        isFirstUserTurn,
+        currentPrompt: prompt,
+      })
+
+      persistSession(sessionId, titleForSave, latestMessagesRef.current)
+
+      if (
+        needsAiChatTitle({
+          sessionId,
+          aiTitleRequested: aiTitleRequestedRef.current,
+          resolvedTitles: resolvedChatTitleRef.current,
+          sessions: sessionsRef.current,
+        })
+      ) {
+        aiTitleRequestedRef.current.add(sessionId)
+        void (async () => {
+          try {
+            const tr = await fetch("/api/chat/session-title", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                firstMessage: pickFirstUserMessageForSessionTitle({
+                  isFirstUserTurn,
+                  currentPrompt: prompt,
+                  priorMessages: messages,
+                }),
+              }),
+            })
+            if (!tr.ok) {
+              aiTitleRequestedRef.current.delete(sessionId)
+              return
+            }
+            const body = (await tr.json()) as { title?: string }
+            const nextTitle = body.title?.trim()
+            if (!nextTitle) {
+              aiTitleRequestedRef.current.delete(sessionId)
+              return
+            }
+            resolvedChatTitleRef.current.set(sessionId, nextTitle)
+            setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title: nextTitle } : s)))
+            persistSession(sessionId, nextTitle, latestMessagesRef.current)
+            aiTitleRequestedRef.current.delete(sessionId)
+          } catch {
+            aiTitleRequestedRef.current.delete(sessionId)
+          }
+        })()
+      }
     }
   }
 
@@ -382,11 +534,13 @@ export default function HomePage() {
       }
     }
 
-    updateAssistantMessage(assistantId, (current) => ({
-      ...current,
-      status: current.status === "error" ? "error" : "idle",
-      content: current.content || "I finished the request.",
-    }))
+    flushSync(() => {
+      updateAssistantMessage(assistantId, (current) => ({
+        ...current,
+        status: current.status === "error" ? "error" : "idle",
+        content: current.content || "I finished the request.",
+      }))
+    })
   }
 
   function applyAgentEvent(assistantId: string, event: AgentStreamEvent) {
@@ -405,6 +559,11 @@ export default function HomePage() {
         })
         break
       case "needs_kroger_auth":
+        if (typeof window !== "undefined") {
+          clearKrogerConnectPromptDismissed(window.sessionStorage)
+          setKrogerPromptDismissed(false)
+          setKrogerConnectPromptOpen(true)
+        }
         updateAssistantMessage(assistantId, (c) => ({
           ...c,
           status: "idle",
@@ -426,7 +585,7 @@ export default function HomePage() {
           ...c,
           status: "error",
           error: event.message,
-          content: c.content || event.message,
+          content: c.content || event.message?.trim() || "The agent could not finish that turn.",
         }))
         break
     }
@@ -442,12 +601,28 @@ export default function HomePage() {
 
   if (!userLoaded) return null
 
-  if (!user) return <LoginScreen onAuthed={handleAuthed} />
+  const onboardingOverlay = (
+    <OnboardingOverlay
+      open={onboardingOpen}
+      onOpenChange={handleOnboardingOpenChange}
+      signedIn={Boolean(user)}
+    />
+  )
+
+  if (!user) {
+    return (
+      <>
+        <LoginScreen onAuthed={handleAuthed} />
+        {onboardingOverlay}
+      </>
+    )
+  }
 
   const firstName = user.name.split(" ")[0]
 
   return (
-    <div className="relative z-10 flex h-screen overflow-hidden">
+    <>
+    <div className="relative z-10 flex h-screen overflow-hidden bg-[radial-gradient(circle_at_20%_0%,rgba(245,177,80,0.08),transparent_35%),radial-gradient(circle_at_90%_90%,rgba(56,189,248,0.07),transparent_30%)]">
       {/* Left sidebar */}
       <Sidebar
         sessions={sessions}
@@ -465,7 +640,7 @@ export default function HomePage() {
       <div className="flex min-w-0 flex-1 flex-col">
 
         {/* ── Header ── */}
-        <header className="flex items-center gap-3 border-b border-white/[0.07] bg-[oklch(0.13_0.02_248/0.5)] px-4 py-2.5 backdrop-blur-sm">
+        <header className="surface-glass-soft flex items-center gap-3 border-b border-white/[0.07] px-4 py-2.5">
           {/* Hamburger (mobile) */}
           <button
             onClick={() => setSidebarOpen(true)}
@@ -490,17 +665,27 @@ export default function HomePage() {
             </span>
           </div>
 
+          <button
+            type="button"
+            onClick={() => setOnboardingOpen(true)}
+            className="interactive-shimmer rounded-xl p-2 text-white/38 transition-colors hover:bg-white/8 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/45"
+            aria-label="Open product tour"
+            title="How CraveCart works"
+          >
+            <CircleHelp className="h-5 w-5" />
+          </button>
+
           {/* Kroger button */}
           <KrogerConnectButton
             isConnected={krogerConnected}
-            isMock={krogerIsMock}
-            onConnected={handleKrogerConnected}
+            attentionNudge={krogerPromptDismissed && !krogerConnected}
+            onDisconnected={handleKrogerDisconnected}
           />
         </header>
 
         {/* ── Chat area ── */}
         <main className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-4 md:px-8">
-          <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
+          <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
             <section className="flex min-h-0 flex-1 flex-col">
 
               {/* Messages */}
@@ -510,90 +695,56 @@ export default function HomePage() {
               >
                 {/* Welcome screen */}
                 {messages.length === 0 && (
-                  <div className="flex min-h-full flex-col gap-4 pb-2">
-                    {/* Cinematic hero fill — tagline + food floaters + category chips */}
-                    <div className="flex min-h-0 flex-1 items-center justify-center py-2">
-                      <WelcomeHero
-                        onSelectCategory={submitPrompt}
-                        krogerConnected={krogerConnected}
-                      />
+                  <div className="flex min-h-full flex-col gap-3 pb-3">
+                    {/* Masthead — tagline + cravings */}
+                    <div className="flex min-h-0 shrink-0 items-center justify-center pt-2 md:pt-3">
+                      <WelcomeHero onSelectCategory={submitPrompt} agentChatEnabled />
                     </div>
-                    <article className="w-full">
 
-                      {/* Hero card */}
-                      <div className="relative overflow-hidden rounded-[28px] border border-white/[0.09] bg-[oklch(0.15_0.02_248/0.6)] px-6 py-6 backdrop-blur-xl">
-                        {/* Top gradient line */}
+                    <article className="w-full space-y-3">
+                      {/* Primary prompt card */}
+                      <div className="surface-glass interactive-shimmer relative overflow-hidden rounded-[24px] px-5 py-5 sm:rounded-[28px] sm:px-6 sm:py-6">
                         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
 
-                        <div className="flex items-start gap-4">
-                          <div className="relative mt-0.5 shrink-0">
-                            <div className="absolute inset-0 rounded-xl bg-primary/20 blur-md" />
-                            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-primary/30 bg-gradient-to-br from-primary/25 to-primary/8">
-                              <ShoppingCart className="h-5 w-5 text-primary" />
+                        <div className="flex gap-4">
+                          <div className="relative mt-1 shrink-0">
+                            <div className="absolute inset-0 rounded-xl bg-primary/18 blur-lg" />
+                            <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-primary/28 bg-gradient-to-br from-primary/22 to-primary/6">
+                              <ShoppingCart className="h-5 w-5 text-primary" aria-hidden />
                             </div>
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-[10px] uppercase tracking-[0.22em] text-white/35">
-                              CraveCart · AI Agent
-                            </p>
-                            <h1 className="mt-2 text-2xl font-semibold leading-snug tracking-tight text-white md:text-[1.65rem]">
+                            <h1 className="text-xl font-semibold leading-snug tracking-tight text-white sm:text-[1.375rem]">
                               Hey {firstName}, what are you craving?
                             </h1>
-                            <p className="mt-2 text-[14px] leading-relaxed text-white/55">
-                              Tell me a dish, a video, or just "buy groceries" — I'll handle the rest
-                              across YouTube and Kroger in real time.
+                            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/52 sm:text-[14px]">
+                              One conversation for video, groceries, and (when Kroger&apos;s linked) cart — start with anything below or type your own.
                             </p>
                           </div>
                         </div>
-
-                        {/* Feature pills */}
-                        <div className="mt-5 flex flex-wrap gap-2">
-                          {FEATURE_PILLS.map((pill) => (
-                            <span
-                              key={pill}
-                              className="rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-1 text-[11px] text-white/45"
-                            >
-                              {pill}
-                            </span>
-                          ))}
-                        </div>
                       </div>
 
-                      {/* Kroger gate notice */}
-                      {!krogerConnected && (
-                        <div className="mt-3 flex items-center gap-3 rounded-2xl border border-amber-400/18 bg-amber-400/7 px-4 py-3">
-                          <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/70" />
-                          <p className="text-[13px] text-amber-200/75">
-                            Use the{" "}
-                            <span className="font-medium text-amber-200">Connect Kroger</span>{" "}
-                            button above to link your account before chatting.
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Suggestion chips */}
-                      {krogerConnected && (
-                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {EXAMPLES.map(({ icon: Icon, text }) => (
-                            <button
-                              key={text}
-                              type="button"
-                              onClick={() => submitPrompt(text)}
-                              className={cn(
-                                "group flex items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3",
-                                "text-left text-[13px] text-white/60 transition-all duration-150",
-                                "hover:border-primary/30 hover:bg-primary/[0.08] hover:text-white/90",
-                                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50"
-                              )}
-                            >
-                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/5 transition-colors group-hover:border-primary/25 group-hover:bg-primary/10">
-                                <Icon className="h-3.5 w-3.5 text-white/45 transition-colors group-hover:text-primary/80" />
-                              </span>
-                              <span className="leading-snug">{text}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                      {/* Starter prompts */}
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {EXAMPLES.map(({ icon: Icon, text }) => (
+                          <button
+                            key={text}
+                            type="button"
+                            onClick={() => submitPrompt(text)}
+                            className={cn(
+                              "group flex items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3",
+                              "text-left text-[13px] text-white/60 transition-all duration-150",
+                              "hover:border-primary/30 hover:bg-primary/[0.08] hover:text-white/90",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50",
+                            )}
+                          >
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/8 bg-white/5 transition-colors group-hover:border-primary/25 group-hover:bg-primary/10">
+                              <Icon className="h-3.5 w-3.5 text-white/45 transition-colors group-hover:text-primary/80" />
+                            </span>
+                            <span className="leading-snug">{text}</span>
+                          </button>
+                        ))}
+                      </div>
                     </article>
                   </div>
                 )}
@@ -607,8 +758,8 @@ export default function HomePage() {
                     <div
                       className={
                         message.role === "user"
-                          ? "rounded-[22px] border border-primary/16 bg-gradient-to-br from-primary/14 to-primary/8 px-5 py-3.5 text-white shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
-                          : "rounded-[24px] border border-white/[0.08] bg-[oklch(0.15_0.02_248/0.55)] px-5 py-4 text-white backdrop-blur-lg"
+                          ? "interactive-shimmer rounded-[22px] border border-primary/16 bg-gradient-to-br from-primary/14 to-primary/8 px-5 py-3.5 text-white shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
+                          : "surface-glass-soft interactive-shimmer rounded-[24px] px-5 py-4 text-white"
                       }
                     >
                       <p
@@ -686,33 +837,36 @@ export default function HomePage() {
               </div>
 
               {/* ── Input bar ── */}
-              {krogerConnected ? (
-                <div className="border-t border-white/[0.07] bg-gradient-to-t from-[oklch(0.12_0.02_248/0.98)] via-[oklch(0.12_0.02_248/0.85)] to-transparent pt-3">
-                  <ChatInput
-                    onSubmit={submitPrompt}
-                    isLoading={isSending}
-                    placeholder="Ask for a recipe, groceries, or both…"
-                  />
-                </div>
-              ) : (
-                <div className="border-t border-white/[0.07] pt-3">
-                  <div
-                    className="flex items-center justify-center gap-2.5 rounded-2xl border border-amber-400/15 bg-amber-400/5 px-5 py-3.5"
-                    role="status"
-                    aria-label="Connect Kroger to enable chat"
-                  >
-                    <div className="h-1.5 w-1.5 rounded-full bg-amber-400/60" />
-                    <p className="text-[13px] text-amber-200/65">
-                      Connect Kroger above to start chatting
-                    </p>
-                  </div>
-                </div>
-              )}
+              <div className="border-t border-white/[0.07] bg-gradient-to-t from-[oklch(0.12_0.02_248/0.98)] via-[oklch(0.12_0.02_248/0.85)] to-transparent pt-3">
+                <ChatInput
+                  onSubmit={submitPrompt}
+                  isLoading={isSending}
+                  placeholder={
+                    krogerConnected
+                      ? "Ask for a recipe, groceries, or both…"
+                      : "Chat works now — link Kroger (top-right) when you want cart checkout…"
+                  }
+                />
+                {!krogerConnected ? (
+                  <p className="mt-2 text-center text-[11px] text-white/32">
+                    Without Kroger, the assistant can browse ideas and prep lists — reconnect when you&apos;re ready to match products and carts.
+                  </p>
+                ) : null}
+              </div>
             </section>
           </div>
         </main>
       </div>
+
     </div>
+
+      <ConnectKrogerPromptDialog
+        open={krogerConnectPromptOpen}
+        onOpenChange={setKrogerConnectPromptOpen}
+        afterDismissPersist={() => setKrogerPromptDismissed(true)}
+      />
+    {onboardingOverlay}
+    </>
   )
 }
 
@@ -724,10 +878,6 @@ function makeUserMessage(content: string): UiMessage {
 
 function makeAssistantPlaceholder(): UiMessage {
   return { id: makeMessageId(), role: "assistant", content: "", status: "streaming", traces: [], video: null, cart: null, authUrl: null, error: null }
-}
-
-function toChatHistory(messages: UiMessage[]): ChatMessage[] {
-  return messages.map((m) => ({ role: m.role, content: m.content }))
 }
 
 function parseSseEvent(block: string): AgentStreamEvent | null {
@@ -752,12 +902,23 @@ function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
   const video = output.video as Record<string, unknown> | undefined
   if (!video || typeof video.title !== "string" || typeof video.url !== "string" || typeof video.channel !== "string") return null
   const recipeSource =
-    output.recipeSource === "youtube_transcript" || output.recipeSource === "fallback_recipe" || output.recipeSource === "none"
+    output.recipeSource === "youtube_transcript" ||
+    output.recipeSource === "fallback_recipe" ||
+    output.recipeSource === "video_metadata" ||
+    output.recipeSource === "none"
       ? output.recipeSource : "none"
   return {
     kind: "video",
     video: { title: video.title, url: video.url, channel: video.channel },
     transcriptAvailable: Boolean(output.transcriptAvailable),
+    transcriptStatus:
+      output.transcriptStatus === "available" ||
+      output.transcriptStatus === "unavailable" ||
+      output.transcriptStatus === "blocked" ||
+      output.transcriptStatus === "error"
+        ? output.transcriptStatus
+        : undefined,
+    transcriptMessage: typeof output.transcriptMessage === "string" ? output.transcriptMessage : undefined,
     recipeSource,
     summary:
       typeof output.recipeText === "string" ? output.recipeText.slice(0, 280)

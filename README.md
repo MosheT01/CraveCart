@@ -33,6 +33,7 @@ The browser only talks to the Next.js app. **Firebase** handles email/password i
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` default `gemini-2.5-flash`
 - `YOUTUBE_API_KEY`
+- `SUPADATA_API_KEY` optional but recommended for public-video transcript retrieval
 - `KROGER_CLIENT_ID`
 - `KROGER_CLIENT_SECRET`
 - `KROGER_REDIRECT_URI`
@@ -58,7 +59,7 @@ Optional local overrides:
 ## Setup
 
 1. Copy `.env.example` to `.env`.
-2. Fill in Gemini, YouTube, and Kroger values (including `KROGER_LOCATION_ID` for store-scoped search).
+2. Fill in Gemini, YouTube, and Kroger values (including `KROGER_LOCATION_ID` for store-scoped search). Set `SUPADATA_API_KEY` too if you want reliable native-caption retrieval when direct transcript scraping is blocked.
 3. Ensure the Kroger developer console lists a redirect URI that exactly matches `KROGER_REDIRECT_URI`.
 
 ## Run Locally
@@ -171,3 +172,4 @@ Covered areas:
 - Product matching is heuristic.
 - Signed-in chat history is stored in Firebase Firestore (`cravecart_user_chats`); anonymous/local-only remnants may still migrate from `localStorage` once after login.
 - The agent is intentionally domain-focused and will redirect unrelated prompts back toward food videos and grocery tasks.
+- Supadata transcript fetches run in `mode=native` only, so the app uses existing captions and does not silently switch to AI-generated transcripts.
