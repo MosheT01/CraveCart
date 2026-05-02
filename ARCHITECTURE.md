@@ -141,7 +141,6 @@ This service handles:
 - product search for a fixed configured store
 - batched add-to-cart requests implemented internally as item-by-item writes
 - last cart summary persistence
-- mock mode for local/demo continuity
 
 It exposes both:
 
@@ -245,7 +244,7 @@ It checks:
 - YouTube key present
 - YouTube MCP `/health`
 - Kroger MCP `/health`
-- whether Kroger is in mock mode
+- whether Kroger API credentials are present in the web service env
 
 ## 7. Session Model
 
@@ -676,7 +675,7 @@ That lets the app:
 Cart writes require:
 
 - explicit buy intent in the latest user turn
-- a connected Kroger session unless mock mode is on
+- a connected Kroger session
 
 The add-to-cart tool accepts a batch, but `kroger-mcp` writes each item one by one with `PUT /cart/add`. This lets the app:
 
@@ -714,30 +713,9 @@ Important properties:
 - browser and backend state are stitched together by `cravecart_session`
 - redirect URI must match the Kroger app configuration exactly
 
-## 19. Mock Mode
+## 19. Kroger integration
 
-Primary files:
-
-- [lib/env.ts](lib/env.ts)
-- [kroger-mcp/app.py](kroger-mcp/app.py)
-
-Mock mode turns on when:
-
-- `KROGER_MOCK_MODE=true`
-- or Kroger credentials are missing
-
-Mock mode behavior:
-
-- auth status always returns authenticated
-- product search resolves against a local mock catalog
-- add-to-cart succeeds synthetically
-- the MCP surface stays the same as live mode
-
-This is important because it means:
-
-- the agent path is consistent
-- local demos do not require live auth
-- the web app does not fork its core logic for mock vs real
+Kroger product search and cart writes always use the live Kroger API. Configure `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET`, `KROGER_REDIRECT_URI`, and `KROGER_LOCATION_ID` in every environment (local, compose, Cloud Run).
 
 ## 20. Compatibility Wrapper
 
@@ -833,7 +811,6 @@ Important envs:
 - `KROGER_CLIENT_SECRET`
 - `KROGER_REDIRECT_URI`
 - `KROGER_LOCATION_ID`
-- `KROGER_MOCK_MODE`
 - `APP_BASE_URL`
 
 Optional service overrides:
@@ -861,7 +838,7 @@ The current suite focuses on the places where agentic systems usually break:
 - deterministic product ranking
 - quantity estimation
 - UI activity trace normalization
-- mock/cart behavior
+- Kroger MCP auth and cart aggregation smoke tests
 
 This is an important pattern in the repo:
 

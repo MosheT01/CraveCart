@@ -19,7 +19,6 @@ class KrogerMcpSmokeTest(unittest.TestCase):
         os.environ["KROGER_CLIENT_ID"] = "demo-client"
         os.environ["KROGER_CLIENT_SECRET"] = "demo-secret"
         os.environ["KROGER_REDIRECT_URI"] = "http://localhost:3000/auth/kroger/callback"
-        os.environ["KROGER_MOCK_MODE"] = "false"
         self.client = TestClient(kroger_app.app)
 
     def test_auth_start_returns_shape(self) -> None:

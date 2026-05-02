@@ -1,0 +1,30 @@
+# Fast checks without GCP/Fly credentials: syntax + workflow YAML parse.
+name: CI — deploy infra scripts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-deploy-infra-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bash syntax — deploy-fly-ci.sh
+        run: bash -n kroger-mcp/deploy-fly-ci.sh
+
+      - name: Parse workflow YAML
+        run: |
+          ruby -ryaml -e "YAML.safe_load(File.read('.github/workflows/deploy-main.yml')); puts 'deploy-main.yml: OK'"
+          ruby -ryaml -e "YAML.safe_load(File.read('.github/workflows/ci-deploy-infra-scripts.yml')); puts 'self: OK'"

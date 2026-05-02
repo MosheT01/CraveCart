@@ -37,8 +37,8 @@ The browser only talks to the Next.js app. Kroger tokens stay server-side in the
 - `KROGER_CLIENT_SECRET`
 - `KROGER_REDIRECT_URI`
 - `KROGER_LOCATION_ID`
-- `KROGER_MOCK_MODE`
 - `APP_BASE_URL`
+- `INTERNAL_SIDECAR_SECRET` (required for Compose if you expose sidecars auth; matches GCP Secret **`INTERNAL_SIDECAR_SECRET`** in Cloud Run prod)
 
 Optional local overrides:
 
@@ -50,9 +50,8 @@ Optional local overrides:
 ## Setup
 
 1. Copy `.env.example` to `.env`.
-2. Fill in Gemini, YouTube, and Kroger values.
-3. For safe local runs, keep `KROGER_MOCK_MODE=true`.
-4. For live cart writes, set `KROGER_MOCK_MODE=false` and make sure the registered Kroger redirect URI exactly matches `KROGER_REDIRECT_URI`.
+2. Fill in Gemini, YouTube, and Kroger values (including `KROGER_LOCATION_ID` for store-scoped search).
+3. Ensure the Kroger developer console lists a redirect URI that exactly matches `KROGER_REDIRECT_URI`.
 
 ## Run Locally
 
@@ -65,8 +64,12 @@ docker compose up --build
 Services:
 
 - `web` on [http://localhost:3000](http://localhost:3000)
-- `youtube-mcp` on [http://localhost:8100](http://localhost:8100)
-- `kroger-mcp` on [http://localhost:8000](http://localhost:8000)
+
+`youtube-mcp` and `kroger-mcp` are reachable only inside the Compose network (**not** mapped to host ports); set **`INTERNAL_SIDECAR_SECRET`** in `.env` so only the Next server can call them (see [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md)).
+
+### Google Cloud Run (production)
+
+See [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md) for Artifact Registry, Secret Manager, [cloudbuild.yaml](./cloudbuild.yaml), OAuth redirects, and scaling notes (`max-instances` on the web service).
 
 ### Web app only
 
@@ -98,7 +101,7 @@ Compatibility wrapper over the same agent engine for the original craving demo c
 
 ### `GET /api/health`
 
-Reports Gemini config, YouTube config, and MCP service health.
+Reports Gemini config, YouTube config, MCP service health, and non-sensitive deploy metadata (`service`, `revision`, `gitSha`, `checkedAt`) when set.
 
 ## Kroger OAuth
 
@@ -108,15 +111,6 @@ The browser-facing OAuth routes remain in the Next app:
 - `/auth/kroger/callback`
 
 Those routes talk to the Kroger MCP service for auth URL creation, code exchange, and token persistence.
-
-## Mock Mode
-
-When `KROGER_MOCK_MODE=true`:
-
-- Kroger auth is not required
-- Kroger product search uses a mock catalog in the MCP service
-- cart writes are simulated
-- the agent path remains the same as live mode
 
 ## Example Flows
 
@@ -132,7 +126,7 @@ Expected cheeseburger flow:
 2. It retrieves transcript context when available.
 3. If transcript retrieval fails, it loads the seeded fallback cheeseburger recipe.
 4. It searches Kroger products for non-pantry ingredients.
-5. It adds the selected items to the cart or mock-cart.
+5. It adds the selected items to the Kroger cart.
 6. The UI ends on `Your Kroger cart is ready`.
 
 ## Tests
