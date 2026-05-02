@@ -68,11 +68,16 @@ read_sm_optional() {
   gcloud secrets versions access latest --secret="$name" --project="$GCP_PROJECT" 2>/dev/null || true
 }
 
+# Embedded CR/LF/TAB/NUL in INTERNAL_SIDECAR_SECRET break HTTP Bearer (often **400**) and Fly vs GCP comparisons.
+normalize_internal_sidecar_secret() {
+  LC_ALL=C printf '%s' "$1" | tr -d '\000\r\n\t'
+}
+
 INTERNAL_SIDECAR_SECRET_VERSION="${INTERNAL_SIDECAR_SECRET_VERSION:-latest}"
 
 KROGER_CLIENT_ID="$(read_sm_required KROGER_CLIENT_ID)"
 KROGER_CLIENT_SECRET="$(read_sm_required KROGER_CLIENT_SECRET)"
-INTERNAL_SIDECAR_SECRET="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
+INTERNAL_SIDECAR_SECRET="$(normalize_internal_sidecar_secret "$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")")"
 KROGER_LOCATION_ID="$(read_sm_optional KROGER_LOCATION_ID)"
 
 for nm in KROGER_CLIENT_ID KROGER_CLIENT_SECRET INTERNAL_SIDECAR_SECRET; do
@@ -169,45 +174,42 @@ if [[ -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" ]]; then
   fi
 fi
 
-SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
-gh_mask "$SMOKE"
-code=""
-for attempt in 1 2 3 4 5 6; do
-  # Match production: HTTPS to fly.dev TLS terminator + same Host path as cravecart-web outbound fetch.
-  code="$(curl -sS --http1.1 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
-  [[ "$code" == "200" ]] && break
-  [[ "$attempt" -eq 6 ]] || sleep 5
-done
-
-pcode=""
-if [[ "$code" != "200" ]]; then
-  echo "Public GET ${HEALTH_BASE}/health with BearerSecretManager returned HTTP ${code:-000}; checking direct Machine :8000 via fly proxy …" >&2
-  PF=$((16350 + RANDOM % 999))
-  flyctl proxy "${PF}:8000" --app "$FLY_APP" -q >/dev/null 2>&1 &
-  FLY_PROXY_PID=$!
-  sleep 22
-  for attempt in 1 2 3 4 5 6; do
-    pcode="$(curl -sS --http1.1 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "http://127.0.0.1:${PF}/health" 2>/dev/null || true)"
-    [[ "$pcode" == "200" ]] && break
-    [[ "$attempt" -eq 6 ]] || sleep 4
-  done
-  kill "${FLY_PROXY_PID}" 2>/dev/null || true
-  wait "${FLY_PROXY_PID}" 2>/dev/null || true
-fi
-unset SMOKE
-
-if [[ "$code" == "200" ]]; then
-  echo "Fly /health bearer check OK (public ingress ${HEALTH_BASE})."
+# Optional: set SKIP_FLY_BEARER_HEALTH=1 in the workflow if you only want deploy+secrets without this gate.
+if [[ "${SKIP_FLY_BEARER_HEALTH:-0}" == "1" ]]; then
+  echo "SKIP_FLY_BEARER_HEALTH=1 — skipping GET ${HEALTH_BASE}/health Bearer check."
   exit 0
 fi
 
-if [[ "$pcode" == "200" ]]; then
-  echo "::error::INTERNAL_SIDECAR_SECRET verifies on the Machine (Fly WireGuard proxy localhost -> :8000 returned 200) but https://${FLY_HEALTH_HOST}/health from the runner returned HTTP ${code:-000}. cravecart-web uses the public fly.dev URL: treat this as ingress/HTTP-edge behavior until fixed, not GCP Secret Manager drift."
-  exit 1
+SMOKE="$(normalize_internal_sidecar_secret "$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")")"
+gh_mask "$SMOKE"
+HBODY="$(mktemp "${TMPDIR:-/tmp}/cravecart-health.XXXXXX")"
+trap 'rm -f "${HBODY}"' EXIT
+code=""
+for attempt in 1 2 3 4 5 6; do
+  # Same path production uses: TLS to fly.dev, then your FastAPI app.
+  code="$(
+    curl -sS --http1.1 --max-time 45 -o "${HBODY}" -w "%{http_code}" \
+      -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || printf '000'
+  )"
+  [[ "$code" == "200" ]] && break
+  [[ "$attempt" -eq 6 ]] || sleep 5
+done
+unset SMOKE
+
+if [[ "$code" == "200" ]]; then
+  echo "Fly /health bearer check OK (${HEALTH_BASE})."
+  exit 0
 fi
 
-echo "Post-deploy check failed." >&2
-echo "Neither public (${code:-000}) nor WireGuard fly-proxy (${pcode:-000}) Bearer /health succeeded." >&2
-echo "That almost always means the **INTERNAL_SIDECAR_SECRET** inside Fly’s runtime ≠ the GCP Secret Manager value this script just read (INTERNAL_SIDECAR_SECRET_VERSION=${INTERNAL_SIDECAR_SECRET_VERSION:-latest}). Confirm fly secrets show a digest bump after import; re-import from SM; verify no typo in INTERNAL_SIDECAR_SECRET name." >&2
-echo "Forbidden JSON body is ONLY from middleware: token != INTERNAL_SIDECAR_SECRET (503 = secret missing)." >&2
+echo "GET ${HEALTH_BASE}/health with Bearer from GCP Secret Manager (version ${INTERNAL_SIDECAR_SECRET_VERSION:-latest}) failed." >&2
+echo "HTTP status: ${code:-unknown}" >&2
+echo "Response body (first 800 bytes, cat -v so control chars are visible):" >&2
+head -c 800 "${HBODY}" 2>/dev/null | cat -v >&2 || true
+echo >&2
+echo "How to read this:" >&2
+echo "  • 200 + JSON ok → pass (you should not see this block)." >&2
+echo "  • 403 + {\"detail\":\"Unauthorized\"} → InternalSidecarGate: Bearer token ≠ INTERNAL_SIDECAR_SECRET in the Fly process." >&2
+echo "  • 503 + INTERNAL_SIDECAR_SECRET must be set → secret missing in Fly env." >&2
+echo "  • 400 + HTML or empty → usually edge/proxy; compare with a manual curl from your laptop." >&2
+echo "  • 000 → curl got no response (DNS/TLS/timeout)." >&2
 exit 1

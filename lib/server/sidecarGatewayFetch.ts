@@ -5,8 +5,13 @@
  */
 import { readEnv } from "@/lib/env"
 
+/** Normalize Secret Manager payloads that accidentally include CRLF/TAB/null — invalid in HTTP Bearer and often cause 400 from edges. */
+function normalizeBearerSecret(raw: string): string {
+  return raw.replace(/\u0000|\r|\n|\t/g, "")
+}
+
 export function getInternalSidecarSecret(): string {
-  return readEnv("INTERNAL_SIDECAR_SECRET", "")
+  return normalizeBearerSecret(readEnv("INTERNAL_SIDECAR_SECRET", ""))
 }
 
 export function isCloudRunServiceUrl(urlStr: string): boolean {

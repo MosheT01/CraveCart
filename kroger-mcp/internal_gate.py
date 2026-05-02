@@ -13,6 +13,12 @@ def env(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
+def bearer_safe(value: str) -> str:
+    """Strip NUL/CR/LF/TAB — invalid in HTTP Bearer and common SM copy‑paste drift vs Cloud Run env."""
+    v = value.strip().replace("\r", "").replace("\n", "").replace("\t", "")
+    return "".join(ch for ch in v if ord(ch) != 0)
+
+
 def _is_cloud_run() -> bool:
     return bool(os.getenv("K_SERVICE"))
 
@@ -26,7 +32,7 @@ class InternalSidecarGate(BaseHTTPMiddleware):
         if _is_cloud_run():
             return await call_next(request)
 
-        secret = env("INTERNAL_SIDECAR_SECRET")
+        secret = bearer_safe(env("INTERNAL_SIDECAR_SECRET"))
         if _is_fly() and not secret:
             return JSONResponse(
                 {"detail": "INTERNAL_SIDECAR_SECRET must be set on Fly (fly secrets set)."},
@@ -38,7 +44,7 @@ class InternalSidecarGate(BaseHTTPMiddleware):
         auth = request.headers.get("authorization") or ""
         token = ""
         if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
+            token = bearer_safe(auth[7:])
         if token != secret:
             return JSONResponse({"detail": "Unauthorized"}, status_code=403)
 
