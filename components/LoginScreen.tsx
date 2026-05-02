@@ -17,6 +17,8 @@ import {
   sendCravecartPasswordResetEmail,
   type LoadedFirebaseBrowserConfig,
 } from "@/lib/firebase/clientAuth"
+import { ONBOARDING_STEPS } from "@/lib/onboarding/narrative"
+import { isReturningVisitor, markVisited } from "@/lib/onboarding/state"
 import { cn } from "@/lib/utils"
 
 type Tab = "signin" | "signup"
@@ -58,6 +60,15 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
   /** Forgot password panel */
   const [fpEmail, setFpEmail] = useState("")
   const [fpDone, setFpDone] = useState(false)
+
+  const [visitorKind] = useState<"fresh" | "returning">(() => {
+    if (typeof window === "undefined") return "fresh"
+    return isReturningVisitor(window.localStorage) ? "returning" : "fresh"
+  })
+
+  useEffect(() => {
+    markVisited(window.localStorage)
+  }, [])
 
   async function loadAuthedUserFromMe(): Promise<AuthUserDto | null> {
     const meRes = await fetch("/api/auth/me", { credentials: "same-origin" })
@@ -230,22 +241,19 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
 
   if (showForgot) {
     return (
-      <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
-        <div className="w-full max-w-[420px] space-y-7">
-          <div className="flex flex-col items-center text-center">
-            <div className="relative mb-4 inline-flex">
-              <div className="absolute inset-0 rounded-2xl bg-primary/30 blur-xl" />
-              <div className="relative flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/25 via-primary/12 to-transparent shadow-xl shadow-primary/10">
-                <ShoppingCart className="h-[26px] w-[26px] text-primary" />
-              </div>
-            </div>
+      <main className="relative z-10 min-h-screen px-4 py-10 lg:flex lg:items-center lg:justify-center lg:py-12">
+        <div className="mx-auto grid w-full max-w-6xl gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-14">
+          <BrandStoryPanel variant={visitorKind} />
+
+          <div className="mx-auto w-full max-w-[440px] space-y-6 lg:mx-0 lg:justify-self-end">
+          <div className="flex flex-col items-center text-center lg:items-start lg:text-left">
             <h1 className="text-[26px] font-semibold tracking-tight text-white">Reset password</h1>
             <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">
               {fpDone ? "Check your email for a reset link from Firebase." : "We’ll email reset instructions."}
             </p>
           </div>
 
-          <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[oklch(0.135_0.02_248/0.85)] shadow-2xl shadow-black/50 backdrop-blur-2xl">
+          <div className="surface-glass cinematic-divider relative overflow-hidden rounded-[28px]">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
             <div className="px-7 py-6">
               {fpDone ? (
@@ -297,28 +305,20 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
               )}
             </div>
           </div>
+          </div>
         </div>
       </main>
     )
   }
 
   return (
-    <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
-      <div className="w-full max-w-[420px] space-y-7">
-        {/* Brand */}
-        <div className="flex flex-col items-center text-center">
-          <div className="relative mb-4 inline-flex">
-            <div className="absolute inset-0 rounded-2xl bg-primary/30 blur-xl" />
-            <div className="relative flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/25 via-primary/12 to-transparent shadow-xl shadow-primary/10">
-              <ShoppingCart className="h-[26px] w-[26px] text-primary" />
-            </div>
-          </div>
-          <h1 className="text-[26px] font-semibold tracking-tight text-white">CraveCart</h1>
-          <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">AI-powered food planning and grocery shopping</p>
-        </div>
+    <main className="relative z-10 min-h-screen px-4 py-10 lg:flex lg:items-center lg:justify-center lg:py-12">
+      <div className="mx-auto grid w-full max-w-6xl gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-14">
+        <BrandStoryPanel variant={visitorKind} />
 
+        <div className="mx-auto w-full max-w-[440px] space-y-6 lg:mx-0 lg:justify-self-end">
         {/* Auth card */}
-        <div className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[oklch(0.135_0.02_248/0.85)] shadow-2xl shadow-black/50 backdrop-blur-2xl">
+        <div className="surface-glass cinematic-divider relative overflow-hidden rounded-[28px]">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
           {/* Tab bar */}
@@ -505,13 +505,112 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
           </div>
         </div>
 
-        <p className="text-center text-[11px] text-white/18">Powered by Gemini · YouTube · Kroger</p>
+        <p className="text-center text-[11px] text-white/25 lg:text-left">Powered by Gemini · YouTube · Kroger · Secure OAuth handoff</p>
+        </div>
       </div>
     </main>
   )
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
+
+function BrandStoryPanel({ variant }: { variant: "fresh" | "returning" }) {
+  const [tilt, setTilt] = useState({ x: 0, y: 0 })
+
+  function handleMove(event: React.MouseEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const dx = (event.clientX - rect.left) / rect.width - 0.5
+    const dy = (event.clientY - rect.top) / rect.height - 0.5
+    setTilt({ x: dx * 6, y: dy * -5 })
+  }
+
+  function handleLeave() {
+    setTilt({ x: 0, y: 0 })
+  }
+
+  return (
+    <div className="relative order-1 flex flex-col justify-center lg:order-none">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.07]">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)`,
+            backgroundSize: "48px 48px",
+          }}
+        />
+      </div>
+      <div className="pointer-events-none absolute -left-12 -top-12 h-48 w-48 rounded-full bg-primary/20 blur-3xl animate-[cinematic-drift_8s_ease-in-out_infinite]" />
+      <div className="pointer-events-none absolute -bottom-10 right-0 h-40 w-40 rounded-full bg-emerald-400/15 blur-3xl animate-[cinematic-drift_10s_ease-in-out_infinite]" />
+
+      <div className="relative space-y-6 text-center lg:text-left" onMouseMove={handleMove} onMouseLeave={handleLeave}>
+        <div className="inline-flex flex-col items-center gap-4 lg:items-start">
+          <div className="relative inline-flex">
+            <div className="absolute inset-0 rounded-2xl bg-primary/35 blur-2xl animate-pulse" />
+            <div className="relative flex h-[78px] w-[78px] items-center justify-center rounded-2xl border border-primary/35 bg-gradient-to-br from-primary/30 via-primary/14 to-transparent shadow-2xl shadow-primary/15">
+              <ShoppingCart className="h-[34px] w-[34px] text-primary animate-[food-float_6s_ease-in-out_infinite]" />
+              <span className="absolute -right-2 -top-2 h-3 w-3 rounded-full bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.7)] animate-[orbit-slow_4s_linear_infinite]" />
+            </div>
+          </div>
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-primary/75">Your AI grocery agent</p>
+            {variant === "returning" ? (
+              <>
+                <h1 className="mt-3 text-balance text-[2rem] font-semibold leading-tight tracking-tight text-white md:text-[2.35rem]">
+                  Welcome back
+                </h1>
+                <p className="mt-3 max-w-md text-[15px] leading-relaxed text-white/48">
+                  Sign in to continue planning meals and building your Kroger cart.
+                </p>
+              </>
+            ) : (
+              <>
+                <h1 className="mt-3 bg-gradient-to-r from-white via-white to-white/55 bg-clip-text text-balance text-[2rem] font-semibold leading-tight tracking-tight text-transparent md:text-[2.45rem]">
+                  Crave it. Find it. Cart it.
+                </h1>
+                <p className="mt-3 max-w-md text-[15px] leading-relaxed text-white/48">
+                  A cinematic AI grocery flow: from craving to checkout in minutes, not hours.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+
+        <ul
+          className="space-y-3 pt-2 transition-transform duration-300"
+          style={{ transform: `perspective(950px) rotateX(${tilt.y}deg) rotateY(${tilt.x}deg)` }}
+        >
+          {ONBOARDING_STEPS.map(({ icon: Icon, title, body, micro }, i) => (
+            <li
+              key={title}
+              className="group relative flex gap-3 overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.035] px-4 py-3.5 text-left backdrop-blur-sm transition-colors hover:border-white/12 animate-[card-pop-in_500ms_ease-out_both]"
+              style={{ animationDelay: `${i * 120}ms` }}
+            >
+              <span className="pointer-events-none absolute inset-y-0 -left-20 w-16 bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-[spotlight-sweep_1000ms_ease-out]" />
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-[11px] font-semibold text-white/35">
+                {i + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 shrink-0 text-primary/85" aria-hidden />
+                  <span className="text-[14px] font-medium text-white/88">{title}</span>
+                </span>
+                <span className="mt-1 block text-[13px] leading-relaxed text-white/45">{body}</span>
+                <span className="mt-1 block text-[11px] leading-relaxed text-white/30">{micro}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <div className="space-y-2 border-t border-white/[0.06] pt-6">
+          <p className="text-[12px] leading-relaxed text-white/38">
+            <span className="font-medium text-white/55">Kroger</span> is a national supermarket chain with pickup and delivery — we connect so your cart matches real store inventory.
+          </p>
+          <p className="text-[11px] text-white/28">Your Kroger password never passes through CraveCart — OAuth keeps sign-in on Kroger&apos;s side.</p>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
   return (

@@ -84,7 +84,7 @@ export function Sidebar({
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-30 flex w-[260px] flex-col",
-          "border-r border-white/[0.07] bg-[oklch(0.12_0.018_248)]",
+          "border-r border-white/[0.07] bg-[oklch(0.12_0.018_248/0.92)] backdrop-blur-xl",
           "transition-transform duration-300 ease-in-out",
           "md:relative md:inset-auto md:z-auto md:translate-x-0",
           isOpen ? "translate-x-0" : "-translate-x-full"
@@ -116,7 +116,7 @@ export function Sidebar({
           <button
             onClick={onNewChat}
             className={cn(
-              "group flex w-full items-center gap-2.5 rounded-xl border border-white/8 bg-white/[0.04]",
+              "group interactive-shimmer flex w-full items-center gap-2.5 rounded-xl border border-white/8 bg-white/[0.04]",
               "px-3 py-2.5 text-sm text-white/60 transition-all duration-150",
               "hover:border-primary/25 hover:bg-primary/8 hover:text-white",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50"
@@ -173,7 +173,7 @@ export function Sidebar({
                             onClick={() => onSelectSession(session.id)}
                             aria-current={isActive ? "page" : undefined}
                             className={cn(
-                              "group relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px]",
+                              "group interactive-shimmer relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[13px]",
                               "border-l-2 transition-all duration-150",
                               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50",
                               isActive
@@ -204,7 +204,7 @@ export function Sidebar({
 
         {/* User profile block */}
         <div className="p-3">
-          <div className="group flex items-center gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.05]">
+          <div className="group interactive-shimmer flex items-center gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.05]">
             {/* Avatar */}
             <div className="relative shrink-0">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-primary/40 to-primary/15 text-[12px] font-bold text-primary shadow-inner shadow-primary/10 ring-1 ring-primary/20">

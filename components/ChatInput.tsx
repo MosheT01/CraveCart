@@ -46,7 +46,7 @@ export function ChatInput({
     <form onSubmit={handleSubmit} className={cn("w-full", className)}>
       <div
         className={cn(
-          "rounded-[22px] border bg-black/40 px-1 pt-1 pb-1 shadow-[0_8px_32px_rgba(0,0,0,0.28)] backdrop-blur-xl transition-all duration-200",
+          "surface-glass rounded-[22px] border px-1 pb-1 pt-1 transition-all duration-200",
           "focus-within:shadow-[0_8px_40px_rgba(0,0,0,0.35)]",
           overLimit
             ? "border-rose-500/30 focus-within:border-rose-500/50"
@@ -80,13 +80,14 @@ export function ChatInput({
 
             <Button
               type="submit"
-              size="icon"
+              size="icon-lg"
+              variant={value.trim() && !overLimit ? "cinematic" : "secondary"}
               disabled={!value.trim() || isLoading || overLimit}
               className={cn(
                 "h-9 w-9 rounded-full shadow-lg transition-all duration-200",
                 "hover:scale-[1.06] active:scale-95",
                 value.trim() && !overLimit
-                  ? "bg-primary text-primary-foreground shadow-primary/30 hover:bg-primary/90 hover:shadow-primary/40"
+                  ? "shadow-primary/30 hover:shadow-primary/40"
                   : "bg-white/8 text-white/30 shadow-none"
               )}
             >

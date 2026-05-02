@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Loader2, LogOut, ShoppingBag } from "lucide-react"
+import { clearKrogerConnectRedirectPending, startKrogerConnect } from "@/lib/kroger/clientStartConnect"
 import { cn } from "@/lib/utils"
 
 type ConnectStatus = "idle" | "loading" | "connected" | "mock"
@@ -9,6 +10,8 @@ type ConnectStatus = "idle" | "loading" | "connected" | "mock"
 interface KrogerConnectButtonProps {
   isConnected: boolean
   isMock: boolean
+  /** Gentle motion + glow — use when user dismissed the Kroger prompt but hasn’t linked yet */
+  attentionNudge?: boolean
   onConnected: () => void
   onDisconnected: () => Promise<void>
 }
@@ -16,6 +19,7 @@ interface KrogerConnectButtonProps {
 export function KrogerConnectButton({
   isConnected,
   isMock,
+  attentionNudge = false,
   onConnected,
   onDisconnected,
 }: KrogerConnectButtonProps) {
@@ -23,6 +27,7 @@ export function KrogerConnectButton({
     !isConnected ? "idle" : isMock ? "mock" : "connected",
   )
   const [disconnecting, setDisconnecting] = useState(false)
+  const [connectHint, setConnectHint] = useState<string | null>(null)
 
   useEffect(() => {
     setStatus(!isConnected ? "idle" : isMock ? "mock" : "connected")
@@ -31,33 +36,26 @@ export function KrogerConnectButton({
   async function handleConnect() {
     if (status !== "idle") return
     setStatus("loading")
+    setConnectHint("Preparing secure Kroger handoff...")
 
     try {
-      const res = await fetch("/api/kroger/auth/start", { method: "POST" })
-      const data = (await res.json()) as { mockMode?: boolean; authUrl?: string; message?: string; error?: string }
+      const result = await startKrogerConnect()
 
-      if (res.status === 401) {
-        setStatus("idle")
-        return
-      }
-
-      if (data.mockMode) {
+      if (result.kind === "mock") {
         setStatus("mock")
-        localStorage.setItem("cravecart_kroger_connected", "1")
-        localStorage.setItem("cravecart_kroger_mock", "1")
         onConnected()
         return
       }
 
-      if (data.authUrl) {
-        localStorage.setItem("cravecart_kroger_pending", "1")
-        window.location.assign(data.authUrl)
+      if (result.kind === "redirect") {
         return
       }
 
       setStatus("idle")
+      setConnectHint("Could not start connect flow.")
     } catch {
       setStatus("idle")
+      setConnectHint("Network issue while connecting.")
     }
   }
 
@@ -69,7 +67,7 @@ export function KrogerConnectButton({
       setStatus("idle")
       localStorage.removeItem("cravecart_kroger_connected")
       localStorage.removeItem("cravecart_kroger_mock")
-      localStorage.removeItem("cravecart_kroger_pending")
+      clearKrogerConnectRedirectPending()
     } finally {
       setDisconnecting(false)
     }
@@ -119,24 +117,28 @@ export function KrogerConnectButton({
   }
 
   return (
-    <button
-      onClick={handleConnect}
-      disabled={status === "loading"}
-      aria-label="Connect your Kroger account"
-      className={cn(
-        "group flex items-center gap-2 rounded-full border border-amber-400/22 bg-amber-400/8 px-3 py-1.5 text-[13px] font-medium text-amber-200/90",
-        "transition-all duration-200",
-        "hover:border-amber-400/40 hover:bg-amber-400/14 hover:text-amber-100 hover:shadow-[0_0_16px_rgba(251,191,36,0.12)]",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400/50",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-      )}
-    >
-      {status === "loading" ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-      ) : (
-        <ShoppingBag className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:scale-110" aria-hidden="true" />
-      )}
-      <span className="hidden sm:inline">{status === "loading" ? "Connecting…" : "Connect Kroger"}</span>
-    </button>
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={handleConnect}
+        disabled={status === "loading"}
+        aria-label="Connect your Kroger account"
+        className={cn(
+          "group flex items-center gap-2 rounded-full border border-amber-400/22 bg-amber-400/8 px-3 py-1.5 text-[13px] font-medium text-amber-200/90",
+          "transition-all duration-200",
+          "hover:border-amber-400/40 hover:bg-amber-400/14 hover:text-amber-100 hover:shadow-[0_0_16px_rgba(251,191,36,0.12)]",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400/50",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          attentionNudge && status === "idle" && "relative z-[1] border-amber-400/55 ring-2 ring-amber-400/30 kroger-connect-nudge motion-reduce:animate-none motion-reduce:ring-amber-400/20",
+        )}
+      >
+        {status === "loading" ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+        ) : (
+          <ShoppingBag className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:scale-110" aria-hidden="true" />
+        )}
+        <span className="hidden sm:inline">{status === "loading" ? "Connecting…" : "Connect Kroger"}</span>
+      </button>
+      {status === "loading" && connectHint ? <p className="text-[10px] text-white/35">{connectHint}</p> : null}
+    </div>
   )
 }

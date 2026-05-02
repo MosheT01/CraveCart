@@ -35,10 +35,11 @@ const CATEGORIES = [
 
 interface WelcomeHeroProps {
   onSelectCategory: (query: string) => void
-  krogerConnected: boolean
+  /** When false, chips are gated (logged-out previews). Signed-in users can chat either way — link Kroger for cart. */
+  agentChatEnabled: boolean
 }
 
-export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroProps) {
+export function WelcomeHero({ onSelectCategory, agentChatEnabled }: WelcomeHeroProps) {
   return (
     <div className="relative w-full max-w-3xl">
       {/* ── Floating food emojis (desktop only) ─────────────────────────── */}
@@ -89,6 +90,14 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
           <p className="mx-auto max-w-sm text-[14px] leading-relaxed text-white/38">
             Describe a dish, paste a video link, or just say "buy groceries" — the agent handles everything live.
           </p>
+          <div className="surface-glass-soft mx-auto mt-3 max-w-xl rounded-2xl px-4 py-3 text-left">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">Live flow preview</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 text-[12px] text-white/60 sm:grid-cols-3">
+              <p className="rounded-lg bg-white/[0.04] px-3 py-2">1. Describe craving</p>
+              <p className="rounded-lg bg-white/[0.04] px-3 py-2">2. AI builds cart</p>
+              <p className="rounded-lg bg-white/[0.04] px-3 py-2">3. Checkout on Kroger</p>
+            </div>
+          </div>
         </div>
 
         {/* Stat labels — informational only, not interactive */}
@@ -123,12 +132,12 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
                 key={cat.label}
                 type="button"
                 onClick={() => onSelectCategory(cat.query)}
-                disabled={!krogerConnected}
-                title={krogerConnected ? cat.query : "Connect Kroger first"}
+                disabled={!agentChatEnabled}
+                title={agentChatEnabled ? cat.query : "Sign in to use quick picks"}
                 className={cn(
                   "flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-[13px] font-medium",
                   "transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/50",
-                  krogerConnected
+                  agentChatEnabled
                     ? [
                         "border-white/10 bg-white/[0.05] text-white/60",
                         "hover:border-primary/35 hover:bg-primary/10 hover:text-white/90",
@@ -143,9 +152,11 @@ export function WelcomeHero({ onSelectCategory, krogerConnected }: WelcomeHeroPr
             ))}
           </div>
 
-          {!krogerConnected && (
-            <p className="mt-2 text-[11px] text-white/20">
-              Connect Kroger above to use quick picks
+          {!agentChatEnabled ? (
+            <p className="mt-2 text-[11px] text-white/20">Sign in to use quick picks.</p>
+          ) : (
+            <p className="mt-2 text-[11px] text-white/28">
+              Link Kroger (top-right) whenever you&apos;re ready for live cart — chat works either way.
             </p>
           )}
         </div>
