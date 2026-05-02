@@ -59,7 +59,9 @@ if [[ -z "${KROGER_LOCATION_ID:-}" ]]; then
       python3 -c '
 import sys, json
 d = json.load(sys.stdin)
-pod = ((((d.get("spec") or {}).get("template") or {}).get("spec") or {})))
+t = d.get("spec") or {}
+tpl = t.get("template") or {}
+pod = tpl.get("spec") or {}
 containers = pod.get("containers") or [{}]
 env = containers[0].get("env") or []
 for row in env:
