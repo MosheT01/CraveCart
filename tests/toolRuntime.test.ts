@@ -29,6 +29,8 @@ describe("AgentToolRuntime", () => {
       latestExtractedRecipe: null,
       pendingSelections: [] as StoredPendingSelection[],
       unmatchedIngredients: [],
+      userPreferences: null,
+      preferencesConfirmed: false,
       updatedAt: Date.now(),
     }
 

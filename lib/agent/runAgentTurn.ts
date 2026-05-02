@@ -8,8 +8,8 @@ import {
   getAgentSystemPrompt,
   toGeminiContents,
 } from "@/lib/agent/gemini"
-import { detectUnsupportedCartOperation, isCartStatusFollowup, isVideoContextFollowup, shouldUseCarryoverContext, suggestToolDomains } from "@/lib/agent/intent"
-import { getAgentSessionState, setAgentSessionState } from "@/lib/agent/sessionState"
+import { detectUnsupportedCartOperation, isCartStatusFollowup, isVideoContextFollowup, shouldUseCarryoverContext, suggestToolDomains, hasExplicitBuyIntent } from "@/lib/agent/intent"
+import { getAgentSessionState, setAgentSessionState, type UserPreferences, parseUserPreferences, isPreferencesConfirmation, getUpdatedPreferencesFromResponse } from "@/lib/agent/sessionState"
 import { devLog } from "@/lib/dev"
 import type { AgentStreamEvent, AgentTurnResult, ChatMessage, ToolTraceEntry } from "@/lib/types"
 
@@ -20,7 +20,9 @@ interface RunAgentTurnInput {
 
 type EventSink = (event: AgentStreamEvent) => Promise<void> | void
 
-const MAX_TOOL_LOOPS = 48
+const MAX_TOOL_LOOPS = 12
+const MAX_CONSECUTIVE_SAME_TOOL = 3
+const MAX_EMPTY_RESPONSE_LOOPS = 2
 
 export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = () => undefined): Promise<AgentTurnResult> {
   const latestUserMessage = input.messages[input.messages.length - 1]?.content ?? ""
@@ -28,7 +30,7 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
   const toolRuntime = new AgentToolRuntime(input.messages, input.sessionId, initialSessionState)
   const activity: ToolTraceEntry[] = []
   const contents: unknown[] = toGeminiContents(input.messages)
-  const systemInstruction = getAgentSystemPrompt(suggestToolDomains(latestUserMessage))
+  const systemInstruction = getAgentSystemPrompt(suggestToolDomains(latestUserMessage), initialSessionState?.userPreferences ?? null)
   let forceTextReply = false
   let forcedShoppingContinuation = false
   let forcedPostCartFollowup = false
@@ -37,6 +39,127 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
   let turnCart: AgentTurnResult["cart"] = null
 
   try {
+    const domainHint = suggestToolDomains(latestUserMessage)
+    const buyIntent = hasExplicitBuyIntent(latestUserMessage)
+    const needsPreferences = !initialSessionState?.userPreferences && (domainHint === "kroger" || domainHint === "hybrid" || buyIntent)
+    const needsConfirmation = initialSessionState?.userPreferences && !initialSessionState?.preferencesConfirmed
+
+    if (needsPreferences) {
+      const parsedPrefs = parseUserPreferences(latestUserMessage)
+      if (parsedPrefs) {
+        const defaultState = {
+          latestArtifact: null,
+          latestCart: null,
+          latestDish: "",
+          latestRecipeSource: "none" as const,
+          latestRecipeText: null,
+          latestFallbackStructuredRecipe: null,
+          latestExtractedRecipe: null,
+          pendingSelections: [],
+          unmatchedIngredients: [],
+          userPreferences: null,
+          preferencesConfirmed: false,
+        }
+        const updatedState = {
+          ...defaultState,
+          ...initialSessionState,
+          userPreferences: parsedPrefs,
+          preferencesConfirmed: true,
+        }
+        setAgentSessionState(input.sessionId, updatedState)
+      } else {
+        const assistantMessage =
+          "I'd be happy to help you find a recipe! First, a few quick questions:\n\n1. Do you have any food allergies? (e.g., nuts, gluten, dairy, shellfish, eggs)\n2. Any dietary preferences? (e.g., vegan, vegetarian, halal, kosher, organic, low-carb, keto)\n3. Any ingredients you avoid? (e.g., alcohol, pork, artificial sweeteners)\n4. Any preference for organic, gluten-free, or specific brands?"
+
+        for (const chunk of chunkTextForStreaming(assistantMessage)) {
+          await sink({
+            type: "assistant_text_delta",
+            delta: chunk,
+          })
+        }
+
+        return {
+          assistantMessage,
+          activity,
+          artifact: null,
+          cart: null,
+          needsAuth: false,
+          authUrl: null,
+        }
+      }
+    }
+
+    if (needsConfirmation) {
+      const prefs = initialSessionState.userPreferences
+      if (isPreferencesConfirmation(latestUserMessage, !!prefs)) {
+        const isNegative = /\bno\b/i.test(latestUserMessage.toLowerCase()) || /\bwrong\b/i.test(latestUserMessage.toLowerCase()) || /\bchange\b/i.test(latestUserMessage.toLowerCase()) || /\bupdate\b/i.test(latestUserMessage.toLowerCase()) || /\bfix\b/i.test(latestUserMessage.toLowerCase())
+
+        if (isNegative && prefs) {
+          const updatedPrefs = getUpdatedPreferencesFromResponse(latestUserMessage, prefs)
+          if (updatedPrefs) {
+            const updatedState = {
+              ...initialSessionState,
+              userPreferences: updatedPrefs,
+              preferencesConfirmed: false,
+            }
+            setAgentSessionState(input.sessionId, updatedState)
+          } else {
+            const assistantMessage =
+              "I understand you'd like to update your preferences. Please tell me your allergies, dietary restrictions, and any ingredients to avoid."
+
+            for (const chunk of chunkTextForStreaming(assistantMessage)) {
+              await sink({
+                type: "assistant_text_delta",
+                delta: chunk,
+              })
+            }
+
+            return {
+              assistantMessage,
+              activity,
+              artifact: null,
+              cart: null,
+              needsAuth: false,
+              authUrl: null,
+            }
+          }
+        } else {
+          const confirmedState = {
+            ...initialSessionState,
+            preferencesConfirmed: true,
+          }
+          setAgentSessionState(input.sessionId, confirmedState)
+        }
+      } else {
+        const allergiesList = prefs?.allergies.length ? prefs.allergies.join(", ") : "none"
+        const dietaryList = prefs?.dietary.length ? prefs.dietary.join(", ") : "none"
+        const avoidedList = prefs?.avoidedIngredients.length ? prefs.avoidedIngredients.join(", ") : "none"
+
+        const assistantMessage =
+          `Quick confirmation for safety:\n\n` +
+          `Allergies: ${allergiesList}\n` +
+          `Dietary preferences: ${dietaryList}\n` +
+          `Ingredients to avoid: ${avoidedList}\n\n` +
+          `Is this correct? Please confirm so I can make sure to avoid any unsafe ingredients.`
+
+        for (const chunk of chunkTextForStreaming(assistantMessage)) {
+          await sink({
+            type: "assistant_text_delta",
+            delta: chunk,
+          })
+        }
+
+        return {
+          assistantMessage,
+          activity,
+          artifact: null,
+          cart: null,
+          needsAuth: false,
+          authUrl: null,
+        }
+      }
+    }
+
     if (initialSessionState && shouldUseCarryoverContext(latestUserMessage)) {
       const carryoverPrompt = toolRuntime.buildCarryoverContextPrompt(latestUserMessage)
       if (carryoverPrompt) {
@@ -185,6 +308,10 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
       }
     }
 
+    let lastToolName = ""
+    let consecutiveSameTool = 0
+    let emptyResponseCount = 0
+
     for (let iteration = 0; iteration < MAX_TOOL_LOOPS; iteration += 1) {
       const turnSystemInstruction = forceTextReply
         ? `${systemInstruction}\nYou are in the final response phase for this turn. Do not call tools. If the user asked for recipe help, recipe instructions, or how to make the dish, give concise step-by-step cooking instructions first, then mention the cart status in one short paragraph.`
@@ -199,6 +326,24 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
       const candidateParts = response.candidates?.[0]?.content?.parts ?? []
 
       if (functionCalls.length === 0) {
+        emptyResponseCount += 1
+        if (emptyResponseCount >= MAX_EMPTY_RESPONSE_LOOPS && !turnCart && !forceTextReply) {
+          const assistantMessage = "I'm having trouble completing that request. Could you try rephrasing or starting fresh?"
+          for (const chunk of chunkTextForStreaming(assistantMessage)) {
+            await sink({
+              type: "assistant_text_delta",
+              delta: chunk,
+            })
+          }
+          return {
+            assistantMessage,
+            activity,
+            artifact: turnArtifact,
+            cart: turnCart,
+            needsAuth: false,
+            authUrl: null,
+          }
+        }
         if (toolRuntime.shouldAutoFinalizeCart()) {
           const traceId = randomTraceId()
           const startedTrace: ToolTraceEntry = {
@@ -361,6 +506,31 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
       const functionResponses = []
 
       for (const call of functionCalls) {
+        if (call.name === lastToolName) {
+          consecutiveSameTool += 1
+        } else {
+          consecutiveSameTool = 1
+          lastToolName = call.name
+        }
+
+        if (consecutiveSameTool > MAX_CONSECUTIVE_SAME_TOOL) {
+          const assistantMessage = `I've tried ${call.name} multiple times without progress. Let's try a different approach.`
+          for (const chunk of chunkTextForStreaming(assistantMessage)) {
+            await sink({
+              type: "assistant_text_delta",
+              delta: chunk,
+            })
+          }
+          return {
+            assistantMessage,
+            activity,
+            artifact: turnArtifact,
+            cart: turnCart,
+            needsAuth: false,
+            authUrl: null,
+          }
+        }
+
         const traceId = call.id || randomTraceId()
         const startedTrace: ToolTraceEntry = {
           id: traceId,
