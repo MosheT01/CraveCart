@@ -50,6 +50,8 @@ interface YoutubeSearchResult {
     durationSeconds: number | null
     score: number
     transcriptAvailable?: boolean
+    transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
+    transcriptMessage?: string
   }>
 }
 
@@ -63,6 +65,7 @@ interface YoutubeContextResult {
     description: string
   }
   transcriptAvailable: boolean
+  transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
   transcript?: string
   transcriptMessage?: string
 }
@@ -528,10 +531,16 @@ export class AgentToolRuntime {
 
     const first = result.data.videos[0]
     const transcriptBackedCount = result.data.videos.filter((video) => video.transcriptAvailable).length
+    const transcriptSummary =
+      transcriptBackedCount === 0
+        ? ""
+        : transcriptBackedCount === result.data.videos.length
+          ? ", all transcript-backed"
+          : `, ${transcriptBackedCount} transcript-backed`
     return {
       response: result.data as unknown as Record<string, unknown>,
       summary: first
-        ? `Found ${result.data.videos.length} YouTube candidates${transcriptBackedCount > 0 ? `, all transcript-backed` : ""}. Top result: ${first.title}.`
+        ? `Found ${result.data.videos.length} YouTube candidates${transcriptSummary}. Top result: ${first.title}.`
         : "No YouTube videos found.",
     }
   }
@@ -551,7 +560,11 @@ export class AgentToolRuntime {
       recipeSource = "youtube_transcript"
       recipeText = buildVideoRecipeText(result.data.video, result.data.transcript)
     } else {
-      recipeText = buildVideoDescriptionContext(result.data.video)
+      recipeText = buildVideoDescriptionContext(
+        result.data.video,
+        result.data.transcriptStatus,
+        result.data.transcriptMessage,
+      )
     }
 
     if (!result.data.transcriptAvailable && dishHint) {
@@ -572,8 +585,17 @@ export class AgentToolRuntime {
     this.latestFallbackStructuredRecipe = fallbackStructuredRecipe
     this.latestExtractedRecipe = null
 
+    const transcriptStatus = result.data.transcriptStatus
     const summary = recipeSource === "youtube_transcript"
       ? `Transcript available for ${result.data.video.title}.`
+      : transcriptStatus === "blocked"
+        ? recipeSource === "fallback_recipe"
+          ? `YouTube temporarily blocked transcript retrieval for ${result.data.video.title}; using the fallback recipe for ${dishHint}.`
+          : `YouTube temporarily blocked transcript retrieval for ${result.data.video.title}; using the video title and description instead.`
+      : transcriptStatus === "error"
+        ? recipeSource === "fallback_recipe"
+          ? `Could not retrieve the transcript for ${result.data.video.title} right now; using the fallback recipe for ${dishHint}.`
+          : `Could not retrieve the transcript for ${result.data.video.title} right now; using the video title and description instead.`
       : recipeSource === "fallback_recipe"
         ? `Transcript unavailable for ${result.data.video.title}; using the fallback recipe for ${dishHint}.`
         : `Transcript unavailable for ${result.data.video.title}; inferring from the video title and description.`
@@ -586,6 +608,8 @@ export class AgentToolRuntime {
         channel: result.data.video.channel,
       },
       transcriptAvailable: result.data.transcriptAvailable,
+      transcriptStatus: result.data.transcriptStatus,
+      transcriptMessage: result.data.transcriptMessage,
       recipeSource,
       summary: recipeText?.slice(0, 280) ?? result.data.video.description ?? summary,
     }
@@ -1140,12 +1164,23 @@ function buildVideoDescriptionContext(
     channel: string
     description?: string
   },
+  transcriptStatus?: "available" | "unavailable" | "blocked" | "error",
+  transcriptMessage?: string,
 ) {
+  const transcriptNote =
+    transcriptStatus === "blocked"
+      ? "Transcript retrieval was temporarily blocked by YouTube from the server side. The video may still have captions on YouTube, so infer the most likely recipe ingredients and instructions from the title and description only."
+      : transcriptStatus === "error"
+        ? "Transcript retrieval failed for this video right now. Infer the most likely recipe ingredients and instructions from the title and description only."
+      : transcriptMessage?.trim()
+        ? `${transcriptMessage.trim()} Infer the most likely recipe ingredients and instructions from the title and description only.`
+        : "Transcript unavailable. Infer the most likely recipe ingredients and instructions from the title and description only."
+
   return [
     `Video title: ${video.title}`,
     video.channel ? `Channel: ${video.channel}` : "",
     video.description?.trim() ? `Video description:\n${video.description.trim()}` : "",
-    "Transcript unavailable. Infer the most likely recipe ingredients and instructions from the title and description only.",
+    transcriptNote,
   ]
     .filter(Boolean)
     .join("\n\n")

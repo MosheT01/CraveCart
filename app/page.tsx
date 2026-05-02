@@ -629,6 +629,7 @@ export default function HomePage() {
       open={onboardingOpen}
       onOpenChange={handleOnboardingOpenChange}
       onKrogerMockConnected={handleKrogerConnected}
+      signedIn={Boolean(user)}
     />
   )
 
@@ -951,6 +952,14 @@ function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
     kind: "video",
     video: { title: video.title, url: video.url, channel: video.channel },
     transcriptAvailable: Boolean(output.transcriptAvailable),
+    transcriptStatus:
+      output.transcriptStatus === "available" ||
+      output.transcriptStatus === "unavailable" ||
+      output.transcriptStatus === "blocked" ||
+      output.transcriptStatus === "error"
+        ? output.transcriptStatus
+        : undefined,
+    transcriptMessage: typeof output.transcriptMessage === "string" ? output.transcriptMessage : undefined,
     recipeSource,
     summary:
       typeof output.recipeText === "string" ? output.recipeText.slice(0, 280)

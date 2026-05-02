@@ -63,6 +63,8 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
             title: savedArtifact.video.title,
             channel: savedArtifact.video.channel,
             transcriptAvailable: savedArtifact.transcriptAvailable,
+            transcriptStatus: savedArtifact.transcriptStatus,
+            transcriptMessage: savedArtifact.transcriptMessage,
             recipeSource: savedArtifact.recipeSource,
             recipeText: toolRuntime.getLatestRecipeText() ?? "",
           }),
@@ -502,18 +504,32 @@ function buildSavedVideoContextPrompt(input: {
   title: string
   channel: string
   transcriptAvailable: boolean
+  transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
+  transcriptMessage?: string
   recipeSource: "youtube_transcript" | "fallback_recipe" | "none"
   recipeText: string
 }) {
+  const transcriptStatusLine =
+    input.transcriptStatus && input.transcriptStatus !== "available"
+      ? `Transcript fetch status: ${input.transcriptStatus}.`
+      : ""
+  const transcriptGuidance = !input.transcriptAvailable
+    ? input.transcriptStatus === "blocked"
+      ? "The video may still have captions on YouTube, but transcript retrieval from the server was blocked. Do not say the video has no captions. Answer from the saved title and description context, and clearly say the answer is inferred because the server could not fetch the transcript."
+      : input.transcriptStatus === "error"
+        ? "The transcript could not be retrieved right now. Answer from the saved title and description context, and clearly say the answer is inferred from the available video metadata."
+        : "The transcript was unavailable. Infer the answer from the saved video title and description context, and say that it is inferred from the available video metadata."
+    : "Use the saved transcript and description context directly."
+
   return [
     "Server note: answer from the saved video context already loaded in this session. Do not call any tools.",
     `User follow-up: ${input.userMessage}`,
     `Current video: ${input.title} by ${input.channel}.`,
     `Transcript available: ${input.transcriptAvailable ? "yes" : "no"}.`,
+    transcriptStatusLine,
+    input.transcriptMessage ? `Transcript note: ${input.transcriptMessage}` : "",
     `Saved recipe source: ${input.recipeSource}.`,
-    !input.transcriptAvailable
-      ? "The transcript was unavailable. Infer the answer from the saved video title and description context, and say that it is inferred from the available video metadata."
-      : "Use the saved transcript and description context directly.",
+    transcriptGuidance,
     `Saved context:\n${input.recipeText.slice(0, 5000)}`,
     "Give a concise, direct answer to the user's question.",
   ].join("\n\n")

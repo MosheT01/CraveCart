@@ -198,6 +198,8 @@ export interface VideoArtifact {
     channel: string
   }
   transcriptAvailable: boolean
+  transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
+  transcriptMessage?: string
   recipeSource: RecipeSource | "none"
   summary: string
 }

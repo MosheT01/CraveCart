@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -12,11 +13,23 @@ from internal_gate import InternalSidecarGate
 from mcp.server.fastmcp import FastMCP
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
+from youtube_transcript_api._errors import (
+    IpBlocked,
+    NoTranscriptFound,
+    RequestBlocked,
+    TranscriptsDisabled,
+    YouTubeTranscriptApiException,
+)
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 TRANSCRIPT_PROBE_LIMIT = 5
+TRANSCRIPT_LANGUAGES = ["en", "en-US", "en-GB"]
+TRANSCRIPT_CACHE_TTL_SECONDS = 15 * 60
+TRANSCRIPT_PROBE_CACHE_TTL_SECONDS = 10 * 60
+
+_transcript_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_transcript_probe_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def env(name: str, fallback: str = "") -> str:
@@ -115,6 +128,68 @@ def clean_transcript(text: str) -> str:
         cleaned = cleaned.replace(phrase, "")
 
     return cleaned.strip()
+
+
+def cache_get(
+    cache: dict[str, tuple[float, dict[str, Any]]],
+    key: str,
+) -> dict[str, Any] | None:
+    cached = cache.get(key)
+    if not cached:
+        return None
+
+    expires_at, payload = cached
+    if expires_at <= time.monotonic():
+        cache.pop(key, None)
+        return None
+
+    return dict(payload)
+
+
+def cache_set(
+    cache: dict[str, tuple[float, dict[str, Any]]],
+    key: str,
+    ttl_seconds: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    cache[key] = (time.monotonic() + ttl_seconds, dict(payload))
+    return payload
+
+
+def build_transcript_error_payload(error: Exception) -> dict[str, Any]:
+    if isinstance(error, (RequestBlocked, IpBlocked)):
+        return {
+            "ok": False,
+            "transcriptAvailable": False,
+            "transcriptStatus": "blocked",
+            "message": (
+                "YouTube temporarily blocked transcript retrieval for this video. "
+                "The transcript may still exist, but the server could not fetch it right now."
+            ),
+        }
+
+    if isinstance(error, (NoTranscriptFound, TranscriptsDisabled)):
+        return {
+            "ok": False,
+            "transcriptAvailable": False,
+            "transcriptStatus": "unavailable",
+            "message": "Transcript unavailable for this video.",
+        }
+
+    if isinstance(error, YouTubeTranscriptApiException):
+        return {
+            "ok": False,
+            "transcriptAvailable": False,
+            "transcriptStatus": "error",
+            "message": "Could not retrieve the transcript right now.",
+        }
+
+    return {
+        "ok": False,
+        "transcriptAvailable": False,
+        "transcriptStatus": "error",
+        "message": "Could not retrieve the transcript right now.",
+    }
 
 
 def youtube_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -216,11 +291,16 @@ def search_videos(query: str, max_results: int) -> list[dict[str, Any]]:
     top_candidates = videos[: min(len(videos), TRANSCRIPT_PROBE_LIMIT)]
 
     for video in top_candidates:
-        transcript_available = has_transcript(video["videoId"])
+        transcript_probe = probe_transcript(video["videoId"])
+        transcript_available = bool(transcript_probe.get("transcriptAvailable"))
         video["transcriptAvailable"] = transcript_available
+        if transcript_probe.get("transcriptStatus"):
+            video["transcriptStatus"] = transcript_probe["transcriptStatus"]
+        if transcript_probe.get("message"):
+            video["transcriptMessage"] = transcript_probe["message"]
         if transcript_available:
             video["score"] += 12
-        else:
+        elif transcript_probe.get("transcriptStatus") == "unavailable":
             video["score"] -= 2
 
     transcript_backed = [video for video in top_candidates if video.get("transcriptAvailable")]
@@ -239,18 +319,57 @@ def search_videos(query: str, max_results: int) -> list[dict[str, Any]]:
     return videos[: max(1, min(max_results, 5))]
 
 
-def fetch_transcript(video_id: str) -> str | None:
-    transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en", "en-US", "en-GB"])
-    text = " ".join(part.text for part in transcript)
-    cleaned = clean_transcript(text)
-    return cleaned or None
+def probe_transcript(video_id: str) -> dict[str, Any]:
+    cached = cache_get(_transcript_probe_cache, video_id)
+    if cached:
+        return cached
 
-
-def has_transcript(video_id: str) -> bool:
     try:
-        return bool(fetch_transcript(video_id))
-    except Exception:
-        return False
+        transcript_list = YouTubeTranscriptApi().list(video_id)
+        transcript_list.find_transcript(TRANSCRIPT_LANGUAGES)
+        return cache_set(
+            _transcript_probe_cache,
+            video_id,
+            TRANSCRIPT_PROBE_CACHE_TTL_SECONDS,
+            {
+                "ok": True,
+                "transcriptAvailable": True,
+                "transcriptStatus": "available",
+            },
+        )
+    except Exception as error:
+        payload = build_transcript_error_payload(error)
+        return cache_set(_transcript_probe_cache, video_id, TRANSCRIPT_PROBE_CACHE_TTL_SECONDS, payload)
+
+
+def fetch_transcript_payload(video_id: str) -> dict[str, Any]:
+    cached = cache_get(_transcript_cache, video_id)
+    if cached:
+        return cached
+
+    try:
+        transcript = YouTubeTranscriptApi().fetch(video_id, languages=TRANSCRIPT_LANGUAGES)
+        text = " ".join(part.text for part in transcript)
+        cleaned = clean_transcript(text)
+        if not cleaned:
+            payload = {
+                "ok": False,
+                "transcriptAvailable": False,
+                "transcriptStatus": "error",
+                "message": "Could not retrieve the transcript right now.",
+            }
+        else:
+            payload = {
+                "ok": True,
+                "transcriptAvailable": True,
+                "transcriptStatus": "available",
+                "wordCount": len(cleaned.split()),
+                "transcript": cleaned[:16000],
+            }
+    except Exception as error:
+        payload = build_transcript_error_payload(error)
+
+    return cache_set(_transcript_cache, video_id, TRANSCRIPT_CACHE_TTL_SECONDS, payload)
 
 
 def get_video_detail(video_id: str) -> dict[str, Any]:
@@ -311,21 +430,7 @@ def search_youtube_videos(query: str, max_results: int = 5) -> dict[str, Any]:
 
 @mcp.tool()
 def get_video_transcript(video_id: str) -> dict[str, Any]:
-    try:
-        transcript = fetch_transcript(video_id)
-        if not transcript:
-            return {"ok": False, "transcriptAvailable": False, "message": "Transcript unavailable."}
-
-        return {
-            "ok": True,
-            "transcriptAvailable": True,
-            "wordCount": len(transcript.split()),
-            "transcript": transcript[:16000],
-        }
-    except (NoTranscriptFound, TranscriptsDisabled):
-        return {"ok": False, "transcriptAvailable": False, "message": "Transcript unavailable."}
-    except Exception:
-        return {"ok": False, "transcriptAvailable": False, "message": "Transcript unavailable."}
+    return fetch_transcript_payload(video_id)
 
 
 @mcp.tool()
@@ -337,6 +442,7 @@ def get_video_context(video_id: str) -> dict[str, Any]:
         "ok": True,
         "video": video,
         "transcriptAvailable": bool(transcript_payload.get("transcriptAvailable")),
+        "transcriptStatus": transcript_payload.get("transcriptStatus"),
         "transcript": transcript_payload.get("transcript"),
         "wordCount": transcript_payload.get("wordCount"),
         "transcriptMessage": transcript_payload.get("message"),

@@ -26,20 +26,28 @@ const DEMO_INGREDIENTS = [
   ["Pasta", "16 oz", "Simple Truth linguine"],
 ] as const
 
-const SCENES = ONBOARDING_STEPS.length
-
 interface OnboardingOverlayProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Called when mock Kroger mode connects without redirect */
   onKrogerMockConnected: () => void
+  /** When false (tour above login), step 3 is informational — no Kroger OAuth until signed in. */
+  signedIn: boolean
 }
 
-export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }: OnboardingOverlayProps) {
+export function OnboardingOverlay({
+  open,
+  onOpenChange,
+  onKrogerMockConnected,
+  signedIn,
+}: OnboardingOverlayProps) {
   const [step, setStep] = useState(0)
   const [connectBusy, setConnectBusy] = useState(false)
   const [handoff, setHandoff] = useState(false)
   const [connectErr, setConnectErr] = useState<string | null>(null)
+
+  const stepCount = ONBOARDING_STEPS.length
+  const maxStepIndex = stepCount - 1
 
   function resetStep() {
     setStep(0)
@@ -58,7 +66,7 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
   }, [open])
 
   function goToStep(target: number) {
-    setStep(Math.max(0, Math.min(target, SCENES - 1)))
+    setStep(Math.max(0, Math.min(target, maxStepIndex)))
   }
 
   async function handleConnectKroger() {
@@ -96,7 +104,7 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
     goToStep(step - 1)
   }
 
-  const stepLabel = useMemo(() => `${step + 1} of ${SCENES}`, [step])
+  const stepLabel = useMemo(() => `${step + 1} of ${stepCount}`, [step, stepCount])
   const StepTwoIcon = ONBOARDING_STEPS[1].icon
 
   return (
@@ -111,7 +119,8 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
         >
           <DialogPrimitive.Title className="sr-only">CraveCart onboarding tour</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">
-            Three steps: welcome to CraveCart, learn about Kroger, connect your account or skip.
+            Three steps: welcome to CraveCart, Kroger-aware shopping, pickup and checkout on Kroger. Connect Kroger
+            from the signed-in app when you&apos;re ready.
           </DialogPrimitive.Description>
           <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
             <div className="absolute -left-1/4 top-0 h-[min(70vh,520px)] w-[min(90vw,720px)] rounded-full bg-primary/12 blur-[120px] animate-[cinematic-drift_8s_ease-in-out_infinite]" />
@@ -122,7 +131,7 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
           <div className="relative z-10 flex min-h-0 flex-1 flex-col pointer-events-auto">
             <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 sm:px-8 sm:py-4">
               <div className="flex min-w-0 items-center gap-2">
-                {Array.from({ length: SCENES }).map((_, i) => (
+                {Array.from({ length: stepCount }).map((_, i) => (
                   <button
                     key={i}
                     type="button"
@@ -290,39 +299,49 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
                         </div>
                       </div>
                     </div>
-                    {connectErr ? (
+                    {signedIn && connectErr ? (
                       <p className="rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-left text-[12px] text-rose-200/90 sm:px-4 sm:py-3 sm:text-[13px]">
                         {connectErr}
                       </p>
                     ) : null}
                     <div className="flex flex-col items-center gap-2 pt-1 sm:gap-3 sm:pt-2">
-                      <Button
-                        type="button"
-                        size="xl"
-                        variant="cinematic"
-                        disabled={connectBusy}
-                        onClick={() => void handleConnectKroger()}
-                        className="relative z-10 h-11 w-full max-w-[280px] text-sm sm:h-12 sm:text-base"
-                      >
-                        {connectBusy ? (
-                          <>
-                            <Loader2 className="h-5 w-5 animate-spin" />
-                            {handoff ? "Preparing secure handoff…" : "Opening Kroger…"}
-                          </>
-                        ) : (
-                          <>
-                            <ShoppingBag className="h-5 w-5" />
-                            Connect Kroger account
-                          </>
-                        )}
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenChange(false)}
-                        className="text-[12px] text-white/40 underline-offset-4 transition-colors hover:text-white/65 hover:underline sm:text-[13px]"
-                      >
-                        I&apos;ll do this later
-                      </button>
+                      {signedIn ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="xl"
+                            variant="cinematic"
+                            disabled={connectBusy}
+                            onClick={() => void handleConnectKroger()}
+                            className="relative z-10 h-11 w-full max-w-[280px] text-sm sm:h-12 sm:text-base"
+                          >
+                            {connectBusy ? (
+                              <>
+                                <Loader2 className="h-5 w-5 animate-spin" />
+                                {handoff ? "Preparing secure handoff…" : "Opening Kroger…"}
+                              </>
+                            ) : (
+                              <>
+                                <ShoppingBag className="h-5 w-5" />
+                                Connect Kroger account
+                              </>
+                            )}
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenChange(false)}
+                            className="text-[12px] text-white/40 underline-offset-4 transition-colors hover:text-white/65 hover:underline sm:text-[13px]"
+                          >
+                            I&apos;ll do this later
+                          </button>
+                        </>
+                      ) : (
+                        <p className="max-w-xs text-[12px] leading-relaxed text-white/42 sm:max-w-md sm:text-[13px]">
+                          When you&apos;re ready, sign in to CraveCart — then you can link Kroger from the header or
+                          prompt for cart and checkout. Use <span className="text-white/55">Finish tour</span> below to
+                          keep exploring.
+                        </p>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -340,7 +359,7 @@ export function OnboardingOverlay({ open, onOpenChange, onKrogerMockConnected }:
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button>
-              {step < SCENES - 1 ? (
+              {step < maxStepIndex ? (
                 <Button
                   type="button"
                   onClick={goNext}
