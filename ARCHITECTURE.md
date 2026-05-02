@@ -76,6 +76,23 @@ Key entry files:
 
 This is the **authoritative** high-level picture: what talks to what, and where secrets live.
 
+#### At a glance (simple)
+
+```mermaid
+flowchart LR
+    U["User Browser"] --> W["web (Next.js + Gemini host)"]
+    W --> FB["Firebase Auth + Firestore"]
+    W --> G["Gemini API"]
+    W --> YM["youtube-mcp"]
+    W --> KM["kroger-mcp"]
+    YM --> Y["YouTube Data API"]
+    YM --> S["Supadata Transcript API (native only)"]
+    YM --> T["Direct transcript probe / fallback"]
+    KM --> K["Kroger APIs"]
+```
+
+#### Detailed trust boundaries
+
 ```mermaid
 flowchart TB
   subgraph Browser["User browser"]
@@ -212,6 +229,63 @@ flowchart TB
 **Hybrid note:** when `_EXTERNAL_KROGER_SIDECAR_URL` is set in Cloud Build, deploy skips **`cravecart-kroger-mcp`** and points `KROGER_*_URL` at Fly ([cloudbuild.yaml](cloudbuild.yaml)). CI can pin `INTERNAL_SIDECAR_SECRET` to a **specific Secret Manager version** so Cloud Run and Fly never drift ([.github/workflows/deploy-main.yml](.github/workflows/deploy-main.yml), [scripts/ci/pin_internal_sidecar_secret_version.py](scripts/ci/pin_internal_sidecar_secret_version.py)).
 
 After deploy, **`sync-public-urls`** sets `APP_BASE_URL` and `KROGER_REDIRECT_URI` on `web` (and on Cloud Run Kroger MCP when used) so Kroger OAuth matches the live callback.
+
+### 3.4 Agent turn algorithm (`runAgentTurn`)
+
+Each chat request runs **one turn** on the server ([lib/agent/runAgentTurn.ts](lib/agent/runAgentTurn.ts)): deterministic **gates** (preferences, safety confirmation, carry-over context, cart-policy shortcuts) and then, when needed, a **Gemini tool loop** that calls MCP-backed tools via [lib/agent/toolRuntime.ts](lib/agent/toolRuntime.ts), streams **SSE** progress to the browser, and persists updated **session state** when the turn ends.
+
+```mermaid
+flowchart TD
+  A([POST /api/chat · latest user message]) --> B{Dietary prefs missing<br/>for shop/video intent?}
+  B -->|ask once| B1[Stream preference questions · return]
+  B -->|ok| C{Prefs need<br/>user confirmation?}
+  C -->|stream confirm / edit| C1[Return early]
+  C -->|confirmed · continue| D[Inject carry-over context<br/>if short follow-up]
+  D --> E{Video Q without<br/>cart permission?}
+  E -->|yes| E1[Inject saved video context ·<br/>force final text-only reply]
+  E -->|no| F{Carry-over “buy” but<br/>no recipe in session?}
+  F -->|yes| F1[Stream error · return]
+  F -->|no| G{Unsupported cart<br/>operation phrase?}
+  G -->|yes| G1[Stream policy message · return]
+  G -->|no| H{Cart status<br/>small-talk?}
+  H -->|yes| H1[Answer from last cart ·<br/>or needs_kroger_auth]
+  H -->|no| L[Main tool loop · up to MAX_TOOL_LOOPS]
+
+  L --> M{forceTextReply?}
+  M -->|yes| N[Gemini · no tools]
+  M -->|no| O[Gemini · MCP tool declarations]
+
+  N --> P{Model returned<br/>tool calls?}
+  O --> P
+  P -->|no| Q{Empty reply / auto-cart /<br/>shopping nudge?}
+  Q -->|retry or inject user msg| L
+  Q -->|done| R[Extract text · optional recipe wrap-up ·<br/>stream deltas · cart_ready if cart]
+
+  P -->|yes| S{Same tool<br/>too many times?}
+  S -->|yes| S1[Stream stall message · return]
+  S -->|no| T[Execute each tool ·<br/>SSE tool_call_* · update artifacts]
+
+  T --> U{Tool needs<br/>Kroger OAuth?}
+  U -->|yes| U1[needs_kroger_auth · return]
+  U -->|no| V[Append functionResponse parts ·<br/>clear forceText unless video follow-up]
+
+  V --> L
+  R --> Z([Persist sessionState ·<br/>close tool runtime · end turn])
+  B1 --> Z
+  C1 --> Z
+  E1 --> L
+  F1 --> Z
+  G1 --> Z
+  H1 --> Z
+  S1 --> Z
+  U1 --> Z
+```
+
+**Loop limits and policy (high level):**
+
+- **Tool iterations** are capped (`MAX_TOOL_LOOPS`, currently 12); repeated calls to the **same** tool without progress are stopped (`MAX_CONSECUTIVE_SAME_TOOL`).
+- **Cart mutations** go through **permission state** in the tool runtime; the model can be steered with **synthetic user messages** (shopping continuation, post-cart follow-up) instead of only free-form completion.
+- **Early returns** (preferences, confirmation, policy, cached cart answers, OAuth required) **do not** enter the tool loop; they still run the `finally` block that snapshots session state for the next turn.
 
 ## 4. Service Responsibilities
 
