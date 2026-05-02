@@ -45,8 +45,8 @@ substitutions:
   # When non-empty: web points Kroger MCP at Fly; Cloud Run cravecart-kroger-mcp is skipped.
   # When empty: expect Cloud Run service cravecart-kroger-mcp to exist for describe/deploy.
   _EXTERNAL_KROGER_SIDECAR_URL: ""
-  # Prefer a concrete numeric ID from CI (resolved once per workflow); avoids Fly + Cloud Run drifting when "latest"
-  # rotates between Cloud Build and the Fly secrets step (recurring MCP 403 Unauthorized).
+  # Concrete numeric secret version from CI (once per workflow). Avoids Fly + Cloud Run drifting on INTERNAL_SIDECAR_SECRET
+  # when "latest" rotates between Cloud Build and the Fly secrets step (recurring MCP 403 Unauthorized).
   _INTERNAL_SIDECAR_SECRET_VERSION: "latest"
 
 options:

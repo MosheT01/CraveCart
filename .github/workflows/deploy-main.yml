@@ -57,18 +57,29 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      # Pin one Secret Manager *version* ID for INTERNAL_SIDECAR_SECRET for the entire job. Cloud Build fixes that
-      # revision on cravecart-web; Fly import reads the same version. Without this, a new ":latest" between the
-      # two steps causes recurring Bearer 403 on the Kroger MCP.
+      # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
+      # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
+      # Use `versions list` (latest ENABLED), not `versions describe latest` (fragile vs gcloud/access semantics).
       - name: Pin INTERNAL_SIDECAR_SECRET version (Cloud Run + Fly)
         id: sidecar_secret_version
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          RESOURCE="$(gcloud secrets versions describe latest --secret=INTERNAL_SIDECAR_SECRET --project="${GCP_PROJECT_ID}" --format='value(name)')"
-          VID="${RESOURCE##*/}"
-          echo "Pinned INTERNAL_SIDECAR_SECRET to one Secret Manager revision for this workflow run (Cloud Build + Fly)."
+          NAME="$(
+            gcloud secrets versions list INTERNAL_SIDECAR_SECRET \
+              --project="${GCP_PROJECT_ID}" \
+              --filter="state=ENABLED" \
+              --sort-by="~createTime" \
+              --limit=1 \
+              --format="value(name)"
+          )"
+          if [[ -z "${NAME:-}" ]]; then
+            echo "No ENABLED Secret Manager version found for INTERNAL_SIDECAR_SECRET (create the secret / enable a version)." >&2
+            exit 1
+          fi
+          VID="${NAME##*/}"
+          echo "Pinned INTERNAL_SIDECAR_SECRET for this workflow run to Secret Manager version: ${VID}"
           echo "version=${VID}" >> "${GITHUB_OUTPUT}"
 
       - name: Submit Cloud Build (web + youtube MCP + Artifact Registry images)
