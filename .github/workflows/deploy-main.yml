@@ -24,7 +24,6 @@ jobs:
     env:
       CLOUDSDK_VERBOSITY: error
 
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
