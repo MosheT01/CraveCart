@@ -18,11 +18,29 @@ export function isCloudRunServiceUrl(urlStr: string): boolean {
   }
 }
 
+/** Targets that use INTERNAL_SIDECAR_SECRET (Fly, bare Cloud Run–invoked hosts, custom domains) — not GCP *.run.app (ID token). */
+function outboundSidecarNeedsSharedSecret(hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  if (h.endsWith(".run.app")) return false
+  if (h === "localhost" || h.startsWith("127.") || h.endsWith(".localhost")) return false
+  if (h.endsWith(".fly.dev") || h.endsWith(".fly.io")) return true
+  // Docker Compose / K8 short names (kroger-mcp, youtube-mcp) — no bearer required when secret unset.
+  if (!h.includes(".")) return false
+  return true
+}
+
 export async function augmentSidecarHeaders(targetUrlStr: string, base?: HeadersInit): Promise<Headers> {
   const out = new Headers(base ?? {})
 
+  let hostname: string
   try {
-    if (isCloudRunServiceUrl(targetUrlStr)) {
+    hostname = new URL(targetUrlStr).hostname
+  } catch {
+    return out
+  }
+
+  if (isCloudRunServiceUrl(targetUrlStr)) {
+    try {
       const target = new URL(targetUrlStr)
       const audience = `${target.protocol}//${target.host}`
       const { GoogleAuth } = await import("google-auth-library")
@@ -33,14 +51,24 @@ export async function augmentSidecarHeaders(targetUrlStr: string, base?: Headers
       if (bearer) {
         out.set("Authorization", bearer)
       }
-    } else {
-      const secret = getInternalSidecarSecret()
-      if (secret) {
-        out.set("Authorization", `Bearer ${secret}`)
-      }
+    } catch {
+      // ID token failure; YouTube MCP IAM will 403 — see Cloud Run runtime SA roles/run.invoker.
     }
-  } catch {
-    // Unauthenticated outbound call; Cloud Run returns 403.
+    return out
+  }
+
+  const secret = getInternalSidecarSecret()
+  const onCloudRun = Boolean(process.env.K_SERVICE)
+  if (onCloudRun && outboundSidecarNeedsSharedSecret(hostname) && !secret) {
+    throw new Error(
+      "cravecart-web cannot call the Fly Kroger MCP: INTERNAL_SIDECAR_SECRET is unset in this container. " +
+        "In Cloud Run deploy, add `--set-secrets INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest` (and Secret Manager accessor IAM), " +
+        "then redeploy web. On Fly, publish the same Secret Manager value (`deploy-fly-ci.sh` / `-FromGcpSecretManager`).",
+    )
+  }
+
+  if (secret) {
+    out.set("Authorization", `Bearer ${secret}`)
   }
 
   return out

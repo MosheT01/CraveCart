@@ -12,6 +12,17 @@ Only **`cravecart-web`** stays **public** (unauthenticated ingress for the UI). 
 
 `allowed_hosts=["*"]` **does not** make services public—it only disables strict `Host`-header rejects behind proxies (`*.run.app`, docker service names).
 
+### Troubleshooting: `403 {"detail":"Unauthorized"}` on Fly Kroger MCP
+
+Opening **`https://YOUR_APP.fly.dev/health`** in a browser (**no** bearer token) correctly returns **`{"detail":"Unauthorized"}`** once Fly has **`INTERNAL_SIDECAR_SECRET`** deployed—nothing is broken from that probe alone.
+
+**`cravecart-web`** attaches **`Authorization: Bearer <INTERNAL_SIDECAR_SECRET>`** to outbound Kroger MCP calls (**[`lib/server/sidecarGatewayFetch.ts`](../lib/server/sidecarGatewayFetch.ts)**). If **`cravecart-web`** still receives **Unauthorized** during chat/tools, GCP and Fly diverged:
+
+1. **Web service must mount the secret.** `cloudbuild.yaml` **`deploy-web`** uses **`--set-secrets … INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest`**. Confirm the Cloud Run **runtime** SA has **`secretmanager.secretAccessor`** on **`INTERNAL_SIDECAR_SECRET`** and redeploy **`cravecart-web`** after adding the mapping.
+2. **Fly machines must Import the same value as Secret Manager.** Re-run **`kroger-mcp/deploy-fly-ci.sh`** (GitHub **`main`**) or **`deploy-fly.ps1 -FromGcpSecretManager`** so **`fly secrets import`** refreshes **`INTERNAL_SIDECAR_SECRET`**, then deploy.
+
+Empty **`INTERNAL_SIDECAR_SECRET`** on **`cravecart-web`** triggers an explicit runtime error explaining the **`--set-secrets`** requirement (easier than a silent Fly **403**).
+
 ## Credentials: `.env` (local) vs Secret Manager (prod)
 
 | Scope | Kroger/Gemini/YouTube keys |
