@@ -43,6 +43,7 @@ services:
       KROGER_REDIRECT_URI: ${KROGER_REDIRECT_URI:-http://localhost:3000/auth/kroger/callback}
       KROGER_LOCATION_ID: ${KROGER_LOCATION_ID:-}
       INTERNAL_SIDECAR_SECRET: ${INTERNAL_SIDECAR_SECRET:-}
+
     volumes:
       - kroger_mcp_data:/app/data
     expose:

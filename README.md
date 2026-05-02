@@ -71,6 +71,10 @@ Services:
 
 See [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md) for Artifact Registry, Secret Manager, [cloudbuild.yaml](./cloudbuild.yaml), OAuth redirects, and scaling notes (`max-instances` on the web service).
 
+### Google Cloud Run (production)
+
+See [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md) for Artifact Registry, Secret Manager, [cloudbuild.yaml](./cloudbuild.yaml), OAuth redirects, and scaling notes (`max-instances` on the web service).
+
 ### Web app only
 
 This is only useful for UI work if you also point the app at running MCP services.
