@@ -1,5 +1,6 @@
 import { cookies } from "next/headers"
 
+import { useSecureSessionCookies } from "@/lib/env"
 import type { PublicUser } from "@/lib/server/auth/publicUser"
 import { firebaseAdminConfigured, getFirebaseAdminAuth } from "@/lib/server/firebase/admin"
 
@@ -12,7 +13,7 @@ export function firebaseSessionCookieOptions() {
   return {
     httpOnly: true as const,
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureSessionCookies(),
     path: "/",
     maxAge: Math.floor(WEEK_MS / 1000),
   }
