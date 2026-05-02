@@ -8,9 +8,20 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 next.user-config.*
 
-# Secrets and local environment
+# Secrets and environment (never commit real values)
 .env
-.env*.local
+.env.*
+!.env.example
+
+# GCP / Firebase private keys & downloaded credentials
+**/google-services.json
+**/GoogleService-Info.plist
+**/*firebase-adminsdk*.json
+**/*-adminsdk-*.json
+**/*service-account*.json
+*credentials*.json
+*.pem
+.firebase/
 
 # Dependencies and build output
 node_modules/
@@ -43,5 +54,3 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .claude/
-.env
-node_modules/

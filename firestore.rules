@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // CraveCart reads/writes user data only via Firebase Admin SDK (Next.js API routes).
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

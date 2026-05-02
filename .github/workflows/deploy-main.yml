@@ -57,6 +57,14 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Verify Firebase secrets exist (Secret Manager)
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud secrets describe FIREBASE_WEB_API_KEY --project="${GCP_PROJECT_ID}"
+          gcloud secrets describe FIREBASE_SERVICE_ACCOUNT_JSON --project="${GCP_PROJECT_ID}"
+
       # Pin one numeric Secret Manager version for INTERNAL_SIDECAR_SECRET for the whole job. Cloud Build binds that
       # revision on cravecart-web; Fly imports the same bytes — avoids Bearer 403 when "latest" drifts between steps.
       # Uses REST access:latest (secretmanager.versions.access only) — unlike `describe`/`versions list`,
@@ -77,11 +85,19 @@ jobs:
           KROGER_LOCATION_ID: ${{ secrets.KROGER_LOCATION_ID }}
           EXTERNAL_KROGER_SIDECAR_URL: ${{ secrets.EXTERNAL_KROGER_SIDECAR_URL }}
           KROGER_API_HOST: ${{ secrets.KROGER_API_HOST }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
           set -euo pipefail
           SUBS="_AR_HOSTNAME=us-central1-docker.pkg.dev,_AR_REPO=cravecart,_KROGER_LOCATION_ID=${KROGER_LOCATION_ID},_EXTERNAL_KROGER_SIDECAR_URL=${EXTERNAL_KROGER_SIDECAR_URL},_INTERNAL_SIDECAR_SECRET_VERSION=${{ steps.sidecar_secret_version.outputs.version }}"
           if [[ -n "${KROGER_API_HOST:-}" ]]; then
             SUBS="${SUBS},_KROGER_API_HOST=${KROGER_API_HOST}"
+          fi
+          if [[ -n "${FIREBASE_AUTH_DOMAIN:-}" ]]; then
+            SUBS="${SUBS},_FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN}"
+          fi
+          if [[ -n "${FIREBASE_PROJECT_ID:-}" ]]; then
+            SUBS="${SUBS},_FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}"
           fi
           gcloud builds submit \
             --config=cloudbuild.yaml \

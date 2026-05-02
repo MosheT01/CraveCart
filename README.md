@@ -14,9 +14,9 @@ The core product flows are:
 - `youtube-mcp`: Python MCP service for YouTube search and transcript retrieval
 - `kroger-mcp`: Python MCP service for Kroger auth state, product search, cart writes, and browser OAuth endpoints
 
-For a fuller system walkthrough, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+For a fuller system walkthrough (including **Firebase sign-in**, **Firestore chat**, **Kroger OAuth**, and **session cookies**), see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-The browser only talks to the Next.js app. Kroger tokens stay server-side in the Kroger MCP service and are keyed by an opaque `cravecart_session` cookie.
+The browser only talks to the Next.js app. **Firebase** handles email/password identity; the server sets an HTTP-only session cookie. **Kroger** tokens stay in the Kroger MCP service and are keyed by a separate opaque **`cravecart_session`** cookie.
 
 ## Stack
 
@@ -39,6 +39,14 @@ The browser only talks to the Next.js app. Kroger tokens stay server-side in the
 - `KROGER_LOCATION_ID`
 - `APP_BASE_URL`
 - `INTERNAL_SIDECAR_SECRET` (required for Compose if you expose sidecars auth; matches GCP Secret **`INTERNAL_SIDECAR_SECRET`** in Cloud Run prod)
+
+Firebase (auth + chat persistence):
+
+- `FIREBASE_WEB_API_KEY` — Web app API key from the Firebase console
+- `FIREBASE_SERVICE_ACCOUNT_PATH` — path to the Admin SDK JSON on disk (`pnpm dev` / local Node)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` — full JSON blob (production: Secret Manager → Cloud Run)
+- `FIREBASE_SERVICE_ACCOUNT_HOST_PATH` — host path mounted into Docker Compose (`web` reads `/secrets/firebase-sa.json` inside the container)
+- Optional: `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_DOMAIN` if not inferrable or non-default Auth domain
 
 Optional local overrides:
 
@@ -101,7 +109,13 @@ Compatibility wrapper over the same agent engine for the original craving demo c
 
 ### `GET /api/health`
 
-Reports Gemini config, YouTube config, MCP service health, and non-sensitive deploy metadata (`service`, `revision`, `gitSha`, `checkedAt`) when set.
+Reports Gemini config, YouTube config, MCP service health, whether Firebase Admin is configured, and non-sensitive deploy metadata (`service`, `revision`, `gitSha`, `checkedAt`) when set.
+
+## Sign-in and chat storage
+
+- **Auth:** Firebase Authentication (email/password) from the main page; password reset uses `/auth/reset-password` with Firebase `oobCode` handling.
+- **Server session:** `POST /api/auth/session` exchanges a Firebase ID token for an HTTP-only cookie; `GET /api/auth/me` exposes the current user to the UI.
+- **Chat history:** Stored in Firestore for signed-in users (`cravecart_user_chats`); deploy rules with `firebase deploy --only firestore:rules` ([`firebase.json`](./firebase.json), [`.firebaserc`](./.firebaserc) default project for the CLI).
 
 ## Kroger OAuth
 
@@ -155,5 +169,5 @@ Covered areas:
 - Real Kroger cart writes require OAuth.
 - The app uses a fixed configured Kroger location.
 - Product matching is heuristic.
-- The frontend keeps chat history client-side only.
+- Signed-in chat history is stored in Firebase Firestore (`cravecart_user_chats`); anonymous/local-only remnants may still migrate from `localStorage` once after login.
 - The agent is intentionally domain-focused and will redirect unrelated prompts back toward food videos and grocery tasks.

@@ -4,8 +4,6 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      AUTH_SECRET: ${AUTH_SECRET:-}
-      CRAVECART_DATA_DIR: /app/.data
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
@@ -19,11 +17,15 @@ services:
       KROGER_MCP_URL: http://kroger-mcp:8000/mcp/
       KROGER_SIDECAR_URL: http://kroger-mcp:8000
       INTERNAL_SIDECAR_SECRET: ${INTERNAL_SIDECAR_SECRET:-}
+      FIREBASE_SERVICE_ACCOUNT_PATH: /secrets/firebase-sa.json
+      FIREBASE_WEB_API_KEY: ${FIREBASE_WEB_API_KEY:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
+    volumes:
+      - ${FIREBASE_SERVICE_ACCOUNT_HOST_PATH:?Set FIREBASE_SERVICE_ACCOUNT_HOST_PATH in .env to your *-firebase-adminsdk-*.json on the host}:/secrets/firebase-sa.json:ro
     depends_on:
       - youtube-mcp
       - kroger-mcp
-    volumes:
-      - cravecart_web_data:/app/.data
     ports:
       - "3000:3000"
 
@@ -55,4 +57,3 @@ services:
 
 volumes:
   kroger_mcp_data:
-  cravecart_web_data:

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { areKrogerCredentialsConfigured, getYouTubeServiceUrl, isGeminiConfigured, isYouTubeConfigured, readEnv } from "@/lib/env"
 import { KrogerClient } from "@/lib/kroger/KrogerClient"
+import { firebaseAdminConfigured } from "@/lib/server/firebase/admin"
 import { augmentSidecarHeaders } from "@/lib/server/sidecarGatewayFetch"
 
 export async function GET() {
@@ -30,5 +31,6 @@ export async function GET() {
     youtubeMcpHealthy: youtubeHealth.ok,
     krogerCredentialsConfigured: areKrogerCredentialsConfigured(),
     sidecarHealthy: sidecarHealth.ok,
+    firebaseConfigured: firebaseAdminConfigured(),
   })
 }

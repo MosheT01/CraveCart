@@ -1,7 +1,21 @@
 "use client"
 
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
+import {
+  createUserWithEmailAndPassword,
+  getAuth,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  updateProfile,
+} from "firebase/auth"
 import { Eye, EyeOff, ShoppingCart } from "lucide-react"
+import {
+  fetchFirebaseBrowserConfig,
+  getFirebaseBrowserApp,
+  mapFirebaseAuthError,
+  postFirebaseSessionCookie,
+  type LoadedFirebaseBrowserConfig,
+} from "@/lib/firebase/clientAuth"
 import { cn } from "@/lib/utils"
 
 type Tab = "signin" | "signup"
@@ -16,6 +30,8 @@ interface LoginScreenProps {
   onAuthed?: (user: AuthUserDto) => void
 }
 
+type FirebaseGate = "loading" | "ready" | "misconfigured"
+
 export function LoginScreen({ onAuthed }: LoginScreenProps) {
   const [visibleTab, setVisibleTab] = useState<Tab>("signin")
   const [showForgot, setShowForgot] = useState(false)
@@ -24,10 +40,29 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState("")
 
+  const [fbGate, setFbGate] = useState<FirebaseGate>("loading")
+  const [fbCfg, setFbCfg] = useState<LoadedFirebaseBrowserConfig | null>(null)
+
+  useEffect(() => {
+    void fetchFirebaseBrowserConfig().then((c) => {
+      if (c.configured) {
+        setFbCfg(c)
+        setFbGate("ready")
+      } else {
+        setFbGate("misconfigured")
+      }
+    })
+  }, [])
+
   /** Forgot password panel */
   const [fpEmail, setFpEmail] = useState("")
   const [fpDone, setFpDone] = useState(false)
-  const [fpDevUrl, setFpDevUrl] = useState<string | null>(null)
+
+  async function loadAuthedUserFromMe(): Promise<AuthUserDto | null> {
+    const meRes = await fetch("/api/auth/me", { credentials: "same-origin" })
+    const data = (await meRes.json()) as { user: AuthUserDto | null }
+    return data.user ?? null
+  }
 
   // Sign In fields
   const [siEmail, setSiEmail] = useState("")
@@ -57,23 +92,29 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
   async function handleSignIn(e: FormEvent) {
     e.preventDefault()
     setFormError("")
+    if (fbGate !== "ready" || !fbCfg) {
+      setFormError("Firebase is not configured yet. See server logs / .env.example.")
+      return
+    }
     if (!siEmail.trim() || !siPassword) return
     setBusy(true)
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ email: siEmail.trim(), password: siPassword }),
-      })
-      const data = (await res.json()) as { user?: AuthUserDto; error?: string }
-      if (!res.ok) {
-        setFormError(data.error || "Couldn't sign you in.")
-        return
-      }
-      if (data.user) {
-        localStorage.removeItem("cravecart_user")
-        onAuthed?.(data.user)
+      try {
+        const auth = getAuth(getFirebaseBrowserApp(fbCfg))
+        await signInWithEmailAndPassword(auth, siEmail.trim(), siPassword)
+        const idToken = await auth.currentUser!.getIdToken(true)
+        const sess = await postFirebaseSessionCookie(idToken)
+        if (!sess.ok) {
+          setFormError(sess.error)
+          return
+        }
+        const user = await loadAuthedUserFromMe()
+        if (user) {
+          localStorage.removeItem("cravecart_user")
+          onAuthed?.(user)
+        }
+      } catch (err) {
+        setFormError(mapFirebaseAuthError(err))
       }
     } catch {
       setFormError("Network error. Try again.")
@@ -86,6 +127,10 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
     e.preventDefault()
     setSuFieldError("")
     setFormError("")
+    if (fbGate !== "ready" || !fbCfg) {
+      setFormError("Firebase is not configured yet. See server logs / .env.example.")
+      return
+    }
     if (suPassword !== suConfirm) {
       setSuFieldError("Passwords don't match.")
       return
@@ -95,24 +140,23 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
 
     setBusy(true)
     try {
-      const res = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          name,
-          email: suEmail.trim(),
-          password: suPassword,
-        }),
-      })
-      const data = (await res.json()) as { user?: AuthUserDto; error?: string }
-      if (!res.ok) {
-        setFormError(data.error || "Couldn't create account.")
-        return
-      }
-      if (data.user) {
-        localStorage.removeItem("cravecart_user")
-        onAuthed?.(data.user)
+      try {
+        const auth = getAuth(getFirebaseBrowserApp(fbCfg))
+        const cred = await createUserWithEmailAndPassword(auth, suEmail.trim(), suPassword)
+        await updateProfile(cred.user, { displayName: name })
+        const idToken = await cred.user.getIdToken(true)
+        const sess = await postFirebaseSessionCookie(idToken)
+        if (!sess.ok) {
+          setFormError(sess.error)
+          return
+        }
+        const user = await loadAuthedUserFromMe()
+        if (user) {
+          localStorage.removeItem("cravecart_user")
+          onAuthed?.(user)
+        }
+      } catch (err) {
+        setFormError(mapFirebaseAuthError(err))
       }
     } catch {
       setFormError("Network error. Try again.")
@@ -124,23 +168,31 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
   async function handleForgot(e: FormEvent) {
     e.preventDefault()
     setFormError("")
+    if (fbGate !== "ready" || !fbCfg) {
+      setFormError("Firebase is not configured yet.")
+      return
+    }
     if (!fpEmail.trim()) return
     setBusy(true)
     setFpDone(false)
-    setFpDevUrl(null)
     try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: fpEmail.trim() }),
-      })
-      const data = (await res.json()) as { ok?: boolean; devResetUrl?: string }
-      if (!res.ok) {
-        setFormError("Request failed.")
+      try {
+        const auth = getAuth(getFirebaseBrowserApp(fbCfg))
+        const origin =
+          typeof window !== "undefined" && window.location?.origin?.trim?.() ? window.location.origin : ""
+        if (origin) {
+          await sendPasswordResetEmail(auth, fpEmail.trim(), {
+            url: `${origin}/auth/reset-password`,
+            handleCodeInApp: false,
+          })
+        } else {
+          await sendPasswordResetEmail(auth, fpEmail.trim())
+        }
+      } catch (err) {
+        setFormError(mapFirebaseAuthError(err))
         return
       }
       setFpDone(true)
-      if (typeof data.devResetUrl === "string") setFpDevUrl(data.devResetUrl)
     } catch {
       setFormError("Network error. Try again.")
     } finally {
@@ -152,8 +204,31 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
     setShowForgot(true)
     setFpEmail(siEmail.trim())
     setFpDone(false)
-    setFpDevUrl(null)
     setFormError("")
+  }
+
+  if (fbGate === "loading") {
+    return (
+      <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
+        <p className="text-sm text-white/45">Loading sign-in…</p>
+      </main>
+    )
+  }
+
+  if (fbGate === "misconfigured") {
+    return (
+      <main className="relative z-10 flex min-h-screen items-center justify-center px-4 py-12">
+        <div className="max-w-md space-y-3 text-center">
+          <h1 className="text-xl font-semibold text-white">Firebase required</h1>
+          <p className="text-sm leading-relaxed text-white/55">
+            Set <code className="rounded bg-white/10 px-1.5 py-0.5 text-[12px]">FIREBASE_SERVICE_ACCOUNT_PATH</code> (or{" "}
+            <code className="rounded bg-white/10 px-1.5 py-0.5 text-[12px]">FIREBASE_SERVICE_ACCOUNT_JSON</code>) and{" "}
+            <code className="rounded bg-white/10 px-1.5 py-0.5 text-[12px]">FIREBASE_WEB_API_KEY</code> on the server,
+            enable Email/Password auth and Firestore in the Firebase console, then restart.
+          </p>
+        </div>
+      </main>
+    )
   }
 
   const inputCls =
@@ -172,7 +247,7 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
             </div>
             <h1 className="text-[26px] font-semibold tracking-tight text-white">Reset password</h1>
             <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-white/42">
-              {fpDone ? "Follow the reset link." : "We’ll email instructions when SMTP is wired; in development the link prints in the terminal."}
+              {fpDone ? "Check your email for a reset link from Firebase." : "We’ll email reset instructions."}
             </p>
           </div>
 
@@ -182,26 +257,13 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
               {fpDone ? (
                 <div className="space-y-4">
                   <p className="text-[14px] leading-relaxed text-white/65">
-                    If an account exists for that address, a reset flow was started. Production should deliver this via
-                    email.
+                    If an account exists for that address, Firebase sent a reset link.
                   </p>
-                  {fpDevUrl ? (
-                    <div className="rounded-xl border border-primary/25 bg-primary/10 p-4">
-                      <p className="text-[11px] uppercase tracking-[0.14em] text-primary/75">Development reset link</p>
-                      <a
-                        href={fpDevUrl}
-                        className="mt-2 block break-all text-[13px] text-primary underline underline-offset-2 hover:text-white"
-                      >
-                        {fpDevUrl}
-                      </a>
-                    </div>
-                  ) : null}
                   <button
                     type="button"
                     onClick={() => {
                       setShowForgot(false)
                       setFpDone(false)
-                      setFpDevUrl(null)
                     }}
                     className="mt-2 w-full rounded-full border border-white/10 py-3 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/6"
                   >

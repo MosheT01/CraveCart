@@ -3,16 +3,17 @@
 import { Suspense, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
+import { confirmPasswordReset, getAuth } from "firebase/auth"
 import { Eye, EyeOff, ShoppingCart } from "lucide-react"
+import { fetchFirebaseBrowserConfig, getFirebaseBrowserApp, mapFirebaseAuthError } from "@/lib/firebase/clientAuth"
 import { cn } from "@/lib/utils"
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams()
-  const emailFromUrl = searchParams.get("email") ?? ""
-  const tokenFromUrl = searchParams.get("token") ?? ""
+  const oobCode = searchParams.get("oobCode") ?? ""
+  const modeParam = searchParams.get("mode") ?? ""
+  const isFirebaseResetLink = Boolean(oobCode && modeParam === "resetPassword")
 
-  const [email, setEmail] = useState(emailFromUrl)
-  const [token, setToken] = useState(tokenFromUrl)
   const [pw, setPw] = useState("")
   const [pw2, setPw2] = useState("")
   const [showPw, setShowPw] = useState(false)
@@ -23,6 +24,10 @@ function ResetPasswordForm() {
   async function submit(e: FormEvent) {
     e.preventDefault()
     setError("")
+    if (!isFirebaseResetLink) {
+      setError("Open the reset link from your email (this page needs a valid Firebase action link).")
+      return
+    }
     if (pw.length < 8) {
       setError("Password must be at least 8 characters.")
       return
@@ -34,14 +39,16 @@ function ResetPasswordForm() {
 
     setBusy(true)
     try {
-      const res = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), token: token.trim(), password: pw }),
-      })
-      const data = (await res.json()) as { error?: string }
-      if (!res.ok) {
-        setError(data.error || "Reset failed.")
+      const cfg = await fetchFirebaseBrowserConfig()
+      if (!cfg.configured) {
+        setError("Firebase is not enabled on this deployment.")
+        return
+      }
+      try {
+        const auth = getAuth(getFirebaseBrowserApp(cfg))
+        await confirmPasswordReset(auth, oobCode, pw)
+      } catch (err) {
+        setError(mapFirebaseAuthError(err))
         return
       }
       setDone(true)
@@ -73,6 +80,27 @@ function ResetPasswordForm() {
     )
   }
 
+  if (!isFirebaseResetLink) {
+    return (
+      <div className="w-full max-w-[420px] space-y-6 text-center">
+        <div className="mx-auto mb-4 flex h-[60px] w-[60px] items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/25 to-primary/8">
+          <ShoppingCart className="h-[26px] w-[26px] text-primary" />
+        </div>
+        <h1 className="text-[22px] font-semibold text-white">Reset link required</h1>
+        <p className="text-sm leading-relaxed text-white/55">
+          Request a password reset from the CraveCart sign-in screen. This page must be opened from the Firebase email
+          link (includes <span className="font-mono text-[12px] text-white/45">oobCode</span> in the URL).
+        </p>
+        <Link
+          href="/"
+          className="inline-flex w-full items-center justify-center rounded-full border border-white/15 py-3 text-[13px] font-medium text-white/85 transition-colors hover:bg-white/8"
+        >
+          Back to CraveCart
+        </Link>
+      </div>
+    )
+  }
+
   return (
     <div className="w-full max-w-[420px] space-y-6">
       <div className="text-center">
@@ -80,24 +108,10 @@ function ResetPasswordForm() {
           <ShoppingCart className="h-[26px] w-[26px] text-primary" />
         </div>
         <h1 className="text-[26px] font-semibold text-white">Set a new password</h1>
-        <p className="mt-1.5 text-sm text-white/42">Paste the reset token from your email (or dev link).</p>
+        <p className="mt-1.5 text-sm text-white/42">Secure link from your reset email.</p>
       </div>
 
       <form onSubmit={submit} className="space-y-4 rounded-[28px] border border-white/10 bg-[oklch(0.135_0.02_248/0.85)] p-7 shadow-2xl backdrop-blur-2xl">
-        <label className="block space-y-1.5">
-          <span className="text-[10px] uppercase tracking-[0.16em] text-white/35">Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className={inputCls} />
-        </label>
-        <label className="block space-y-1.5">
-          <span className="text-[10px] uppercase tracking-[0.16em] text-white/35">Reset token</span>
-          <textarea
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            required
-            rows={2}
-            className={cn(inputCls, "resize-none font-mono text-[12px]")}
-          />
-        </label>
         <label className="block space-y-1.5">
           <span className="text-[10px] uppercase tracking-[0.16em] text-white/35">New password</span>
           <div className="relative">
