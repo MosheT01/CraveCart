@@ -173,8 +173,8 @@ if (-not $internalSecret) {
     $internalSecret = Read-Host "INTERNAL_SIDECAR_SECRET (must match GCP INTERNAL_SIDECAR_SECRET used by cravecart-web)"
 }
 
-Write-Host "Staging secrets on Fly (Machines pick them up on the deploy below; avoids a double-roll)..."
-flyctl secrets set --stage `
+Write-Host "Publishing secrets on Fly (non-staged: Fly restarts machines with vault env, then deploy updates the image)..."
+flyctl secrets set `
     "KROGER_CLIENT_ID=$cId" `
     "KROGER_CLIENT_SECRET=$cSec" `
     "KROGER_REDIRECT_URI=$KrogerRedirectUri" `
@@ -182,7 +182,7 @@ flyctl secrets set --stage `
     "INTERNAL_SIDECAR_SECRET=$internalSecret" `
     --app $name
 
-Write-Host "`nDeploying (applies staged secrets)..."
+Write-Host "`nDeploying..."
 flyctl deploy --app $name --remote-only 2>&1
 
 $url = "$name.fly.dev"

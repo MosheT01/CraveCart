@@ -118,9 +118,10 @@ gh_mask "$KROGER_LOCATION_ID"
 # Do not call `flyctl apps list` / `apps create` here: a deploy-scoped token
 # (`fly tokens create deploy -a MYAPP`) returns 401 for those APIs and yields a false "missing app".
 # Create the Fly app once from your laptop if needed (`flyctl launch`/`apps create`).
-# Machines: `secrets import` without --stage may roll VMs immediately; a second `fly deploy` rolls again.
-# Stage secrets once, then let `fly deploy` apply them so one release picks up GCP-synced env.
-echo "Applying Fly secrets (staging for next deploy — import via stdin; avoids leaking values in argv)..."
+# Use `secrets import` *without* `--stage`: Fly restarts machines so the vault env is live before we build/deploy
+# a new image. In practice, `--stage` + `fly deploy --remote-only` left some machines serving traffic without
+# refreshed INTERNAL_SIDECAR_SECRET (Bearer /health smoke got 403 despite correct GCP sync).
+echo "Applying Fly secrets (import via stdin — non-staged so machines pick up vault env; avoids argv leaks)..."
 IMPORT_LINES="$(
   KROGER_CLIENT_ID="$KROGER_CLIENT_ID" \
     KROGER_CLIENT_SECRET="$KROGER_CLIENT_SECRET" \
@@ -143,7 +144,7 @@ print(lines, end="")
 PY
 )"
 
-printf '%s' "$IMPORT_LINES" | flyctl secrets import --stage --app "$FLY_APP"
+printf '%s' "$IMPORT_LINES" | flyctl secrets import --app "$FLY_APP"
 unset IMPORT_LINES
 
 unset KROGER_CLIENT_ID KROGER_CLIENT_SECRET INTERNAL_SIDECAR_SECRET KROGER_LOCATION_ID REDIRECT_URI
@@ -157,11 +158,15 @@ if [[ -n "${EXTERNAL_KROGER_SIDECAR_URL:-}" ]]; then
   SMOKE="$(read_sm_required INTERNAL_SIDECAR_SECRET "$INTERNAL_SIDECAR_SECRET_VERSION")"
   gh_mask "$SMOKE"
   code=""
-  code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
+  for attempt in 1 2 3 4 5 6; do
+    code="$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "${HEALTH_BASE}/health" 2>/dev/null || true)"
+    [[ "$code" == "200" ]] && break
+    [[ "$attempt" -eq 6 ]] || sleep 5
+  done
   unset SMOKE
   if [[ "$code" != "200" ]]; then
-    echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200)." >&2
-    echo "Cloud Run cravecart-web may be on a different INTERNAL_SIDECAR_SECRET revision than Fly; see docs/deploy-cloud-run.md." >&2
+    echo "Post-deploy check failed: GET ${HEALTH_BASE}/health with bearer returned HTTP ${code:-000} (expected 200 after retries)." >&2
+    echo "Confirm EXTERNAL_KROGER_SIDECAR_URL matches this Fly app. If GCP/Fly payloads diverge, see docs/deploy-cloud-run.md." >&2
     exit 1
   fi
   echo "Fly /health bearer check OK."
