@@ -184,15 +184,15 @@ if [[ "$code" != "200" ]]; then
   echo "Public GET ${HEALTH_BASE}/health with BearerSecretManager returned HTTP ${code:-000}; checking direct Machine :8000 via fly proxy …" >&2
   PF=$((16350 + RANDOM % 999))
   flyctl proxy "${PF}:8000" --app "$FLY_APP" -q >/dev/null 2>&1 &
-  PPID=$!
+  FLY_PROXY_PID=$!
   sleep 22
   for attempt in 1 2 3 4 5 6; do
     pcode="$(curl -sS --http1.1 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${SMOKE}" "http://127.0.0.1:${PF}/health" 2>/dev/null || true)"
     [[ "$pcode" == "200" ]] && break
     [[ "$attempt" -eq 6 ]] || sleep 4
   done
-  kill "${PPID}" 2>/dev/null || true
-  wait "${PPID}" 2>/dev/null || true
+  kill "${FLY_PROXY_PID}" 2>/dev/null || true
+  wait "${FLY_PROXY_PID}" 2>/dev/null || true
 fi
 unset SMOKE
 
