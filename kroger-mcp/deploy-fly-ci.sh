@@ -25,9 +25,7 @@ if [[ -z "$WEB_URL" ]]; then
 fi
 REDIRECT_URI="${WEB_URL}/auth/kroger/callback"
 
-echo "GCP project=$GCP_PROJECT Fly app=$FLY_APP Kroger redirect=$REDIRECT_URI"
-
-# Register values with GitHub Actions so any later accidental echo is redacted in the web log.
+# Register values with GitHub Actions so echoes are redacted in the web log (no-op elsewhere).
 gh_mask() {
   [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
   local val="$1"
@@ -41,6 +39,16 @@ gh_mask() {
   fi
   echo "::add-mask::${val}"
 }
+
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  gh_mask "$GCP_PROJECT"
+  gh_mask "$WEB_URL"
+  gh_mask "$REDIRECT_URI"
+  gh_mask "$FLY_APP"
+  echo "Starting Kroger MCP sidecar sync (build + secrets + deploy)."
+else
+  echo "GCP project=$GCP_PROJECT Fly app=$FLY_APP Kroger redirect=$REDIRECT_URI"
+fi
 
 read_sm_required() {
   local name="$1" out

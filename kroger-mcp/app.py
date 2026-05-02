@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import requests
 from fastapi import FastAPI, Header, HTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from internal_gate import InternalSidecarGate
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -578,12 +579,13 @@ async def lifespan(_: FastAPI):
         yield
 
 
-# Cloud Run uses *.run.app Host; compose uses kroger-mcp — allow all for this sidecar.
+# Host allowlist: docker service names + Cloud Run / Fly hostnames. Lock down with IAM (GCP) or INTERNAL_SIDECAR_SECRET (Fly).
 fastapi = FastAPI(
     title="CraveCart Kroger MCP",
     lifespan=lifespan,
     allowed_hosts=["*"],
 )
+fastapi.add_middleware(InternalSidecarGate)
 fastapi.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 fastapi.mount("/mcp", mcp_app)
 

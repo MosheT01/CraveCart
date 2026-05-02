@@ -8,8 +8,9 @@ from typing import Any
 
 import requests
 from fastapi import FastAPI
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from internal_gate import InternalSidecarGate
 from mcp.server.fastmcp import FastMCP
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
 
@@ -351,15 +352,15 @@ async def lifespan(_: FastAPI):
         yield
 
 
-# Starlette/HostHeaderMiddleware can be strict about Host header values.
-# In Docker, the client sends Host like `youtube-mcp:8100`, so we allow those.
-# Cloud Run sends Host like *.run.app; allow all hosts for this internal sidecar (no user-facing auth layer).
+# Host allowlist: Compose uses service hostnames; Cloud Run uses *.run.app — public invoke is disabled there (IAM).
 fastapi = FastAPI(
     title="CraveCart YouTube MCP",
     lifespan=lifespan,
     allowed_hosts=["*"],
 )
-# Cloud Run terminates TLS; redirects must stay https (avoids MCP client POST → http breakage).
+# Bearer gate when INTERNAL_SIDECAR_SECRET is set (local/docker); Cloud Run uses IAM at the edge.
+fastapi.add_middleware(InternalSidecarGate)
+# TLS / scheme from reverse proxy (Cloud Run, Fly).
 fastapi.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 fastapi.mount("/mcp", mcp_app)
 

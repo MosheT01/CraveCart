@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server"
 import { areKrogerCredentialsConfigured, getYouTubeServiceUrl, isGeminiConfigured, isYouTubeConfigured, readEnv } from "@/lib/env"
 import { KrogerClient } from "@/lib/kroger/KrogerClient"
+import { augmentSidecarHeaders } from "@/lib/server/sidecarGatewayFetch"
 
 export async function GET() {
   const client = new KrogerClient()
   const sidecarHealth = await client.health()
-  const youtubeHealth = await fetch(`${getYouTubeServiceUrl()}/health`, {
+  const youtubeUrl = `${getYouTubeServiceUrl()}/health`
+  const youtubeHeaders = await augmentSidecarHeaders(youtubeUrl)
+  const youtubeHealth = await fetch(youtubeUrl, {
     cache: "no-store",
+    headers: youtubeHeaders,
   })
     .then(async (response) => {
       if (!response.ok) {

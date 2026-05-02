@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { getKrogerMcpUrl, getMcpToolTimeoutMs, getYouTubeMcpUrl } from "@/lib/env"
+import { sidecarGatewayFetch } from "@/lib/server/sidecarGatewayFetch"
 
 interface McpConnection {
   client: Client
@@ -80,7 +81,9 @@ async function connect(url: string): Promise<McpConnection> {
     name: "cravecart-agent-host",
     version: "0.2.0",
   })
-  const transport = new StreamableHTTPClientTransport(new URL(url))
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    fetch: sidecarGatewayFetch,
+  })
   await client.connect(transport)
   return { client, transport }
 }
