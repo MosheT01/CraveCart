@@ -45,6 +45,7 @@ export function getAgentSystemPrompt(domainHint: string): string {
     "Prefer grocery-searchable ingredient names. For burgers, default toppings can include buns, ground beef, American cheese slices, lettuce, tomato, onion, pickles, ketchup, mustard, and mayo unless the user excludes them.",
     "Do not mutate the Kroger cart unless the user explicitly expresses buy intent in the latest turn.",
     "When you use Kroger product search, prefer the selected product in the tool result unless you have a clear reason to choose an alternative.",
+    "For grocery shopping, prefer get_kroger_auth_status early; when the user is connected to Kroger, product search uses their shopper token and is much more reliable from cloud hosting than anonymous catalog search.",
     "When shopping for a recipe, search all grocery ingredients first, then call add_kroger_items_to_cart once with the full matched batch.",
     "Keep final replies concise and product-focused.",
     `Routing hint for this turn: ${domainHint}.`,

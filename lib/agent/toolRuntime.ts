@@ -27,6 +27,8 @@ interface ToolExecutionOutcome {
   artifact?: AgentArtifact | null
   needsAuth?: boolean
   authUrl?: "/auth/kroger"
+  /** When needsAuth, shown as assistant text + needs_kroger_auth event (defaults in runAgentTurn if omitted). */
+  authUserMessage?: string
 }
 
 interface ToolDeclaration {
@@ -74,7 +76,6 @@ interface KrogerSearchResult {
 interface KrogerAuthStatusResult {
   ok: boolean
   authenticated: boolean
-  mockMode: boolean
   configured: boolean
   authUrl: "/auth/kroger"
 }
@@ -89,6 +90,25 @@ interface KrogerCartAddResult {
     message?: string
   }>
   openCartUrl: string
+}
+
+/** MCP may return {}, non-JSON text, or omit `products` — avoid throwing on `.length`. */
+function normalizeKrogerSearchPayload(data: unknown): KrogerSearchResult {
+  if (!data || typeof data !== "object") {
+    return { ok: false, products: [] }
+  }
+  const record = data as Record<string, unknown>
+  const message =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.text === "string"
+        ? record.text
+        : undefined
+  return {
+    ok: Boolean(record.ok),
+    message,
+    products: Array.isArray(record.products) ? (record.products as KrogerProduct[]) : [],
+  }
 }
 
 interface PendingCartSelection {
@@ -661,13 +681,19 @@ export class AgentToolRuntime {
       session_id: this.sessionId,
     })
 
+    if (result.data.authenticated) {
+      return {
+        response: result.data as unknown as Record<string, unknown>,
+        summary: "The user is connected to Kroger.",
+      }
+    }
+
     return {
       response: result.data as unknown as Record<string, unknown>,
-      summary: result.data.authenticated
-        ? result.data.mockMode
-          ? "Kroger mock mode is active."
-          : "The user is connected to Kroger."
-        : "The user is not connected to Kroger yet.",
+      summary: "The user is not connected to Kroger yet.",
+      needsAuth: true,
+      authUrl: "/auth/kroger",
+      authUserMessage: "Use the **Connect Kroger** button below to sign in on this site.",
     }
   }
 
@@ -701,22 +727,28 @@ export class AgentToolRuntime {
     let alternatives: KrogerProduct[] = []
     let confidence = 0
     let selectedQuery = query
+    let krogerApiMessage: string | undefined
 
     for (const candidateQuery of searchQueries) {
       const attempt = await this.mcpClients.callKrogerTool<KrogerSearchResult>("search_kroger_products", {
         query: candidateQuery,
+        session_id: this.sessionId,
         location_id: readEnv("KROGER_LOCATION_ID"),
         limit: 10,
       })
 
-      result = attempt.data
+      const payload = normalizeKrogerSearchPayload(attempt.data)
+      result = payload
       selectedQuery = candidateQuery
+      if (!payload.ok && payload.message) {
+        krogerApiMessage = payload.message
+      }
 
-      if (!attempt.data.products.length) {
+      if (!payload.products.length) {
         continue
       }
 
-      const ranked = attempt.data.products
+      const ranked = payload.products
         .map((product) => ({
           product,
           score: scoreProductMatch(ingredient, product),
@@ -778,7 +810,9 @@ export class AgentToolRuntime {
       },
       summary: selected
         ? `Matched ${ingredient.name} to ${selected.description}${this.pendingSelections.get(selectionKey)?.quantity && this.pendingSelections.get(selectionKey)!.quantity > 1 ? ` and estimated ${this.pendingSelections.get(selectionKey)!.quantity} retail units` : ""}.`
-        : `No Kroger products matched ${ingredient.name}.`,
+        : krogerApiMessage && !result.ok
+          ? krogerApiMessage
+          : `No Kroger products matched ${ingredient.name}.`,
     }
   }
 
@@ -837,6 +871,7 @@ export class AgentToolRuntime {
         summary: "Kroger auth is required before the cart can be updated.",
         needsAuth: true,
         authUrl: "/auth/kroger",
+        authUserMessage: "Sign in with Kroger using the button below, then rerun your cart request.",
       }
     }
 

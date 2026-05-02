@@ -236,7 +236,8 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
             })
 
             if (outcome.needsAuth) {
-              const assistantMessage = "Connect Kroger, then rerun the request and I’ll finish the cart."
+              const assistantMessage =
+                outcome.authUserMessage ?? "Sign in with Kroger using the button below, then continue in chat."
               for (const chunk of chunkTextForStreaming(assistantMessage)) {
                 await sink({
                   type: "assistant_text_delta",
@@ -395,7 +396,8 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
         })
 
         if (outcome.needsAuth) {
-          const assistantMessage = "Connect Kroger, then rerun the request and I’ll finish the cart."
+          const assistantMessage =
+            outcome.authUserMessage ?? "Sign in with Kroger using the button below, then continue in chat."
           for (const chunk of chunkTextForStreaming(assistantMessage)) {
             await sink({
               type: "assistant_text_delta",

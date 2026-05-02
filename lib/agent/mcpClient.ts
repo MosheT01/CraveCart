@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { getKrogerMcpUrl, getYouTubeMcpUrl } from "@/lib/env"
+import { getKrogerMcpUrl, getMcpToolTimeoutMs, getYouTubeMcpUrl } from "@/lib/env"
 
 interface McpConnection {
   client: Client
@@ -18,19 +18,27 @@ export class AgentMcpClients {
 
   async callYoutubeTool<T>(name: string, args: Record<string, unknown>) {
     const connection = await this.getYouTube()
-    const result = await connection.client.callTool({
-      name,
-      arguments: args,
-    })
+    const result = await connection.client.callTool(
+      {
+        name,
+        arguments: args,
+      },
+      undefined,
+      { timeout: getMcpToolTimeoutMs() },
+    )
     return parseMcpToolResult<T>(result)
   }
 
   async callKrogerTool<T>(name: string, args: Record<string, unknown>) {
     const connection = await this.getKroger()
-    const result = await connection.client.callTool({
-      name,
-      arguments: args,
-    })
+    const result = await connection.client.callTool(
+      {
+        name,
+        arguments: args,
+      },
+      undefined,
+      { timeout: getMcpToolTimeoutMs() },
+    )
     return parseMcpToolResult<T>(result)
   }
 

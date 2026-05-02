@@ -23,7 +23,13 @@ export function scoreProductMatch(ingredient: ExtractedIngredient, product: Krog
     score += 0.05
   }
 
-  if (product.modality === "PICKUP" || product.modality === "DELIVERY") {
+  // Kroger often returns IN_STORE for location-scoped compact results; those were wrongly penalized vs PICKUP/DELIVERY only.
+  if (
+    product.modality === "PICKUP" ||
+    product.modality === "DELIVERY" ||
+    product.modality === "IN_STORE" ||
+    product.modality === "SHIP"
+  ) {
     score += 0.08
   }
 

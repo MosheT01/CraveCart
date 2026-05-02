@@ -1,0 +1,236 @@
+# CraveCart: build images, push to Artifact Registry, deploy three Cloud Run services.
+#
+# Credentials: production Kroger/API keys ALWAYS come from Secret Manager (--set-secrets).
+# Repo-root `.env` is local-only and is NEVER read by this pipeline.
+# Hybrid Fly deploy (kroger-mcp/docs) must use `-FromGcpSecretManager` — do not paste dev `.env` into Fly secrets.
+# Image tags use $BUILD_ID so `gcloud builds submit` from a local folder works ($SHORT_SHA is often empty without a CSR/GitHub trigger).
+#
+# Prerequisites (one-time per project):
+# - Enable APIs: run, artifactregistry, cloudbuild, secretmanager (cloudresourcemanager optional; IAM steps use metadata)
+# - Create Artifact Registry repo (e.g. docker.pkg.dev/PROJECT/cravecart/...)
+# - Grant Cloud Build SA (or whichever SA runs deploy steps — sometimes the default Compute SA): roles/run.admin,
+#   roles/artifactregistry.writer, roles/iam.serviceAccountUser on the Cloud Run runtime SA
+# - Grant the Cloud Run runtime SA (default compute) roles/secretmanager.secretAccessor
+#   on each secret you reference below.
+# - Create secrets: GEMINI_API_KEY, YOUTUBE_API_KEY, KROGER_CLIENT_ID, KROGER_CLIENT_SECRET,
+#   INTERNAL_SIDECAR_SECRET (shared with Fly Kroger MCP; never expose to browsers).
+#   KROGER_LOCATION_ID is usually set as a substitution (non-secret env on services).
+# - Youtube + optional GCP Kroger MCP: authenticated invoke only — web SA needs roles/run.invoker (steps below).
+#
+# Hybrid Kroger MCP (Fly.io): always pass _EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev unless Kroger MCP
+# is deployed on Cloud Run instead (leave _EXTERNAL empty and recreate cravecart-kroger-mcp).
+#
+# Trigger with substitutions, for example:
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_AR_HOSTNAME=...,_AR_REPO=...,_KROGER_LOCATION_ID=YOUR_LOCATION,_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev
+#
+# Register https://<web-service-url>/auth/kroger/callback in Kroger Developer (after first deploy prints the URL).
+#
+# Certification / sandbox Kroger apps must use the cert API host on kroger-mcp, e.g.:
+#   --substitutions=...,_KROGER_API_HOST=api-ce.kroger.com
+#
+# Run deploy `--region` flags are literal `us-central1` in bash steps (aligned with _AR_HOSTNAME location).
+# Windows PowerShell: quote `--substitutions=...` entirely (comma splits argv; `_KROGER_*` then swallows `_EXTERNAL_*`). See docs/deploy-cloud-run.md.
+
+substitutions:
+  # Must match the region used in gcloud run deploy / describe (us-central1-docker.pkg.dev ↔ us-central1).
+  _AR_HOSTNAME: us-central1-docker.pkg.dev
+  # Full Artifact Registry path for Docker: LOCATION-docker.pkg.dev/PROJECT/REPO
+  _AR_REPO: cravecart
+  _GEMINI_MODEL: gemini-2.5-flash
+  _KROGER_LOCATION_ID: ""
+  # Leave empty for Production api.kroger.com; use api-ce.kroger.com for Kroger Certification developer apps.
+  _KROGER_API_HOST: ""
+  # Hybrid Kroger MCP (Fly). Example: https://YOUR_APP.fly.dev — REQUIRED for Fly hybrid (no hardcoded hostname in-repo).
+  # When non-empty: web points Kroger MCP at Fly; Cloud Run cravecart-kroger-mcp is skipped.
+  # When empty: expect Cloud Run service cravecart-kroger-mcp to exist for describe/deploy.
+  _EXTERNAL_KROGER_SIDECAR_URL: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build-web
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/web:$BUILD_ID
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/web:latest
+      - .
+  - id: build-youtube-mcp
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/youtube-mcp:$BUILD_ID
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/youtube-mcp:latest
+      - -f
+      - youtube-mcp/Dockerfile
+      - youtube-mcp
+  - id: build-kroger-mcp
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/kroger-mcp:$BUILD_ID
+      - -t
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/kroger-mcp:latest
+      - -f
+      - kroger-mcp/Dockerfile
+      - kroger-mcp
+  - id: push-all
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/web
+    waitFor:
+      - build-web
+  - id: push-youtube-mcp
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/youtube-mcp
+    waitFor:
+      - build-youtube-mcp
+  - id: push-kroger-mcp
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/kroger-mcp
+    waitFor:
+      - build-kroger-mcp
+
+  - id: deploy-youtube-mcp
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        unset REGION CLOUD_RUN_REGION GOOGLE_CLOUD_REGION 2>/dev/null || true
+        IMAGE="${_AR_HOSTNAME}/$PROJECT_ID/${_AR_REPO}/youtube-mcp:$BUILD_ID"
+        gcloud run deploy cravecart-youtube-mcp \
+          --image "$$IMAGE" \
+          --region "us-central1" \
+          --platform managed \
+          --port 8100 \
+          --memory 512Mi \
+          --min-instances 0 \
+          --max-instances 1 \
+          --set-secrets YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest
+        PN=$$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id")
+        gcloud run services add-iam-policy-binding cravecart-youtube-mcp \
+          --region "us-central1" \
+          --member="serviceAccount:$$PN-compute@developer.gserviceaccount.com" \
+          --role="roles/run.invoker" \
+          --project $PROJECT_ID \
+          --quiet
+    waitFor:
+      - push-youtube-mcp
+  - id: deploy-kroger-mcp
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        unset REGION CLOUD_RUN_REGION GOOGLE_CLOUD_REGION 2>/dev/null || true
+        if [ -n "${_EXTERNAL_KROGER_SIDECAR_URL}" ]; then
+          echo "Skipping Cloud Run cravecart-kroger-mcp deploy (external sidecar ${_EXTERNAL_KROGER_SIDECAR_URL})."
+          exit 0
+        fi
+        IMAGE="${_AR_HOSTNAME}/$PROJECT_ID/${_AR_REPO}/kroger-mcp:$BUILD_ID"
+        KR_ENV="KROGER_LOCATION_ID=${_KROGER_LOCATION_ID}"
+        if [ -n "${_KROGER_API_HOST}" ]; then
+          KR_ENV="$$KR_ENV,KROGER_API_HOST=${_KROGER_API_HOST}"
+        fi
+        gcloud run deploy cravecart-kroger-mcp \
+          --image "$$IMAGE" \
+          --region "us-central1" \
+          --platform managed \
+          --port 8000 \
+          --memory 512Mi \
+          --min-instances 0 \
+          --max-instances 1 \
+          --set-env-vars "$$KR_ENV" \
+          --set-secrets "KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest"
+        PN=$$(curl -fsS -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id")
+        gcloud run services add-iam-policy-binding cravecart-kroger-mcp \
+          --region "us-central1" \
+          --member="serviceAccount:$$PN-compute@developer.gserviceaccount.com" \
+          --role="roles/run.invoker" \
+          --project $PROJECT_ID \
+          --quiet
+    waitFor:
+      - push-kroger-mcp
+  - id: deploy-web
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        unset REGION CLOUD_RUN_REGION GOOGLE_CLOUD_REGION 2>/dev/null || true
+        IMAGE="${_AR_HOSTNAME}/$PROJECT_ID/${_AR_REPO}/web:$BUILD_ID"
+        YT_URL=$$(gcloud run services describe cravecart-youtube-mcp --region "us-central1" --format='value(status.url)')
+        if [ -z "${_EXTERNAL_KROGER_SIDECAR_URL}" ]; then
+          if ! gcloud run services describe cravecart-kroger-mcp --region "us-central1" --format='value(metadata.name)' >/dev/null 2>&1; then
+            echo 'ERROR: _EXTERNAL_KROGER_SIDECAR_URL is unset and Cloud Run cravecart-kroger-mcp was not found. Pass --substitutions=_EXTERNAL_KROGER_SIDECAR_URL=https://YOUR_APP.fly.dev for Fly hybrid Kroger MCP.'
+            exit 1
+          fi
+        fi
+        if [ -n "${_EXTERNAL_KROGER_SIDECAR_URL}" ]; then
+          KR_URL=$$(echo "${_EXTERNAL_KROGER_SIDECAR_URL}" | sed -e 's/[[:space:]]*$$//' -e 's:/*$$::')
+        else
+          KR_URL=$$(gcloud run services describe cravecart-kroger-mcp --region "us-central1" --format='value(status.url)')
+        fi
+        gcloud run deploy cravecart-web \
+          --image "$$IMAGE" \
+          --region "us-central1" \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 3000 \
+          --memory 1Gi \
+          --cpu 1 \
+          --min-instances 0 \
+          --max-instances 1 \
+          --timeout 3600 \
+          --set-env-vars "NODE_ENV=production,GEMINI_MODEL=${_GEMINI_MODEL},KROGER_LOCATION_ID=${_KROGER_LOCATION_ID},YOUTUBE_SERVICE_URL=$$YT_URL,YOUTUBE_MCP_URL=$$YT_URL/mcp/,KROGER_SIDECAR_URL=$$KR_URL,KROGER_MCP_URL=$$KR_URL/mcp/,GIT_SHA=$BUILD_ID" \
+          --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_API_KEY=YOUTUBE_API_KEY:latest,KROGER_CLIENT_ID=KROGER_CLIENT_ID:latest,KROGER_CLIENT_SECRET=KROGER_CLIENT_SECRET:latest,INTERNAL_SIDECAR_SECRET=INTERNAL_SIDECAR_SECRET:latest"
+    waitFor:
+      - deploy-youtube-mcp
+      - deploy-kroger-mcp
+      - push-all
+  - id: sync-public-urls
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        unset REGION CLOUD_RUN_REGION GOOGLE_CLOUD_REGION 2>/dev/null || true
+        WEB_URL=$$(gcloud run services describe cravecart-web --region "us-central1" --format='value(status.url)')
+        REDIRECT="$$WEB_URL/auth/kroger/callback"
+        gcloud run services update cravecart-web --region "us-central1" \
+          --update-env-vars "APP_BASE_URL=$$WEB_URL,KROGER_REDIRECT_URI=$$REDIRECT"
+        if [ -z "${_EXTERNAL_KROGER_SIDECAR_URL}" ]; then
+          gcloud run services update cravecart-kroger-mcp --region "us-central1" \
+            --update-env-vars "KROGER_REDIRECT_URI=$$REDIRECT"
+        else
+          echo "Skipping KROGER_REDIRECT_URI update on cravecart-kroger-mcp (external sidecar)."
+        fi
+        echo "Public web URL: $$WEB_URL"
+        echo "Register this redirect URI in the Kroger developer console: $$REDIRECT"
+    waitFor:
+      - deploy-web
+
+images:
+  - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/web:$BUILD_ID
+  - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/youtube-mcp:$BUILD_ID
+  - $_AR_HOSTNAME/$PROJECT_ID/$_AR_REPO/kroger-mcp:$BUILD_ID
