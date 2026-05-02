@@ -2,27 +2,21 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import { extractResponseText, getGeminiClient } from "@/lib/agent/gemini"
+import {
+  fallbackChatTitleFromFirstMessage,
+  normalizeGeminiChatTitle,
+} from "@/lib/chat/sessionTitle"
 import { getGeminiModel, isGeminiConfigured } from "@/lib/env"
 import { getSessionUser } from "@/lib/server/auth/getSessionUser"
 
 export const runtime = "nodejs"
 
 const bodySchema = z.object({
-  firstMessage: z.string().min(1).max(8000),
+  firstMessage: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() : v),
+    z.string().min(1).max(8000),
+  ),
 })
-
-function fallbackTitle(raw: string): string {
-  const t = raw.replace(/\s+/g, " ").trim()
-  if (!t) return "New chat"
-  return t.length > 48 ? `${t.slice(0, 45)}…` : t
-}
-
-function normalizeTitle(raw: string | undefined, fallbackFromUser: string): string {
-  if (!raw) return fallbackTitle(fallbackFromUser)
-  const oneLine = raw.replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "")
-  if (!oneLine) return fallbackTitle(fallbackFromUser)
-  return oneLine.length > 56 ? `${oneLine.slice(0, 53)}…` : oneLine
-}
 
 export async function POST(request: Request) {
   const user = await getSessionUser()
@@ -38,7 +32,7 @@ export async function POST(request: Request) {
   }
 
   if (!isGeminiConfigured()) {
-    return NextResponse.json({ title: fallbackTitle(parsed.firstMessage) })
+    return NextResponse.json({ title: fallbackChatTitleFromFirstMessage(parsed.firstMessage) })
   }
 
   try {
@@ -58,8 +52,8 @@ export async function POST(request: Request) {
     })
 
     const text = extractResponseText(response)
-    return NextResponse.json({ title: normalizeTitle(text, parsed.firstMessage) })
+    return NextResponse.json({ title: normalizeGeminiChatTitle(text, parsed.firstMessage) })
   } catch {
-    return NextResponse.json({ title: fallbackTitle(parsed.firstMessage) })
+    return NextResponse.json({ title: fallbackChatTitleFromFirstMessage(parsed.firstMessage) })
   }
 }

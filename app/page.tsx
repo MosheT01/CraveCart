@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import Link from "next/link"
 import {
   AlertCircle,
@@ -21,9 +22,15 @@ import { Button } from "@/components/ui/button"
 import { LoginScreen } from "@/components/LoginScreen"
 import { Sidebar, type ChatSession } from "@/components/Sidebar"
 import { KrogerConnectButton } from "@/components/KrogerConnectButton"
+import { buildChatMessagesForAgent, coerceReplayMessageContent } from "@/lib/chat/chatHistoryPayload"
+import {
+  needsAiChatTitle,
+  pickFirstUserMessageForSessionTitle,
+  resolvePersistedChatTitle,
+} from "@/lib/chat/sessionTitle"
 import { cn } from "@/lib/utils"
 import { WelcomeHero } from "@/components/WelcomeHero"
-import type { AgentStreamEvent, CartArtifact, ChatMessage, ToolTraceEntry, VideoArtifact } from "@/lib/types"
+import type { AgentStreamEvent, CartArtifact, ToolTraceEntry, VideoArtifact } from "@/lib/types"
 import type { AuthUserDto } from "@/components/LoginScreen"
 
 const EXAMPLES = [
@@ -235,7 +242,7 @@ export default function HomePage() {
           const restoredLs: UiMessage[] = stored.map((m) => ({
             id: m.id,
             role: m.role,
-            content: m.content,
+            content: coerceReplayMessageContent(m.role, m.content),
             status: "idle",
             traces: [],
             video: m.video as VideoArtifact | null,
@@ -253,7 +260,7 @@ export default function HomePage() {
       const restored: UiMessage[] = rows.map((m) => ({
         id: m.id,
         role: m.role,
-        content: m.content,
+        content: coerceReplayMessageContent(m.role, m.content),
         status: "idle",
         traces: [],
         video: m.video as VideoArtifact | null,
@@ -382,7 +389,7 @@ export default function HomePage() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: toChatHistory(historyForRequest) }),
+        body: JSON.stringify({ messages: buildChatMessagesForAgent(historyForRequest) }),
       })
 
       if (response.status === 401) {
@@ -397,26 +404,35 @@ export default function HomePage() {
 
       await consumeEventStream(response.body, assistantMessage.id)
     } catch (error) {
-      updateAssistantMessage(assistantMessage.id, (current) => ({
-        ...current,
-        status: "error",
-        error: error instanceof Error ? error.message : "Could not reach the CraveCart agent.",
-        content: current.content || "I couldn't complete that request.",
-      }))
+      flushSync(() => {
+        updateAssistantMessage(assistantMessage.id, (current) => ({
+          ...current,
+          status: "error",
+          error: error instanceof Error ? error.message : "Could not reach the CraveCart agent.",
+          content: current.content || "I couldn't complete that request.",
+        }))
+      })
     } finally {
       setIsSending(false)
 
-      const titleForSave = (() => {
-        const fromRef = resolvedChatTitleRef.current.get(sessionId)
-        if (fromRef) return fromRef
-        const fromSidebar = sessionsRef.current.find((s) => s.id === sessionId)?.title
-        if (fromSidebar) return fromSidebar
-        return isFirstUserTurn ? "New chat" : prompt.length > 48 ? `${prompt.slice(0, 45)}…` : prompt
-      })()
+      const titleForSave = resolvePersistedChatTitle({
+        sessionId,
+        resolvedTitles: resolvedChatTitleRef.current,
+        sessions: sessionsRef.current,
+        isFirstUserTurn,
+        currentPrompt: prompt,
+      })
 
       persistSession(sessionId, titleForSave, latestMessagesRef.current)
 
-      if (isFirstUserTurn && !aiTitleRequestedRef.current.has(sessionId)) {
+      if (
+        needsAiChatTitle({
+          sessionId,
+          aiTitleRequested: aiTitleRequestedRef.current,
+          resolvedTitles: resolvedChatTitleRef.current,
+          sessions: sessionsRef.current,
+        })
+      ) {
         aiTitleRequestedRef.current.add(sessionId)
         void (async () => {
           try {
@@ -424,15 +440,28 @@ export default function HomePage() {
               method: "POST",
               credentials: "same-origin",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ firstMessage: prompt }),
+              body: JSON.stringify({
+                firstMessage: pickFirstUserMessageForSessionTitle({
+                  isFirstUserTurn,
+                  currentPrompt: prompt,
+                  priorMessages: messages,
+                }),
+              }),
             })
-            if (!tr.ok) return
+            if (!tr.ok) {
+              aiTitleRequestedRef.current.delete(sessionId)
+              return
+            }
             const body = (await tr.json()) as { title?: string }
             const nextTitle = body.title?.trim()
-            if (!nextTitle) return
+            if (!nextTitle) {
+              aiTitleRequestedRef.current.delete(sessionId)
+              return
+            }
             resolvedChatTitleRef.current.set(sessionId, nextTitle)
             setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title: nextTitle } : s)))
             persistSession(sessionId, nextTitle, latestMessagesRef.current)
+            aiTitleRequestedRef.current.delete(sessionId)
           } catch {
             aiTitleRequestedRef.current.delete(sessionId)
           }
@@ -462,11 +491,13 @@ export default function HomePage() {
       }
     }
 
-    updateAssistantMessage(assistantId, (current) => ({
-      ...current,
-      status: current.status === "error" ? "error" : "idle",
-      content: current.content || "I finished the request.",
-    }))
+    flushSync(() => {
+      updateAssistantMessage(assistantId, (current) => ({
+        ...current,
+        status: current.status === "error" ? "error" : "idle",
+        content: current.content || "I finished the request.",
+      }))
+    })
   }
 
   function applyAgentEvent(assistantId: string, event: AgentStreamEvent) {
@@ -506,7 +537,7 @@ export default function HomePage() {
           ...c,
           status: "error",
           error: event.message,
-          content: c.content || event.message,
+          content: c.content || event.message?.trim() || "The agent could not finish that turn.",
         }))
         break
     }
@@ -805,10 +836,6 @@ function makeUserMessage(content: string): UiMessage {
 
 function makeAssistantPlaceholder(): UiMessage {
   return { id: makeMessageId(), role: "assistant", content: "", status: "streaming", traces: [], video: null, cart: null, authUrl: null, error: null }
-}
-
-function toChatHistory(messages: UiMessage[]): ChatMessage[] {
-  return messages.map((m) => ({ role: m.role, content: m.content }))
 }
 
 function parseSseEvent(block: string): AgentStreamEvent | null {

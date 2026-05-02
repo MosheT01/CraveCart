@@ -90,6 +90,13 @@ export async function sendCravecartPasswordResetEmail(auth: Auth, email: string,
 
 export type FirebaseAuthMessageContext = "signIn" | "passwordReset" | "signUp"
 
+/**
+ * Outlook/Hotmail “safe links” prefetch URLs and can consume Firebase’s single-use reset code before the user loads
+ * the page; Gmail seldom does this — same app, different inbox behavior.
+ */
+export const FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT =
+  "Outlook/Hotmail often scan reset links before you open them (Safe Links), which invalidates the one-time code—copy the link from the email, paste it into the address bar, or request another reset."
+
 export function mapFirebaseAuthError(err: unknown, context: FirebaseAuthMessageContext = "signIn"): string {
   const code = (err as AuthError | undefined)?.code
   switch (code) {
@@ -110,7 +117,9 @@ export function mapFirebaseAuthError(err: unknown, context: FirebaseAuthMessageC
       return "Too many attempts. Try again shortly."
     case "auth/invalid-action-code":
     case "auth/expired-action-code":
-      return "This reset link is invalid or expired. Request a new one."
+      return context === "passwordReset"
+        ? `This reset link is invalid or expired. ${FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT}`
+        : "This reset link is invalid or expired. Request a new one."
     case "auth/unauthorized-continue-uri":
     case "auth/invalid-continue-uri":
       return context === "passwordReset"

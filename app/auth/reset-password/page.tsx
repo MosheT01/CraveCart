@@ -5,7 +5,12 @@ import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { confirmPasswordReset, getAuth } from "firebase/auth"
 import { Eye, EyeOff, ShoppingCart } from "lucide-react"
-import { fetchFirebaseBrowserConfig, getFirebaseBrowserApp, mapFirebaseAuthError } from "@/lib/firebase/clientAuth"
+import {
+  fetchFirebaseBrowserConfig,
+  FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT,
+  getFirebaseBrowserApp,
+  mapFirebaseAuthError,
+} from "@/lib/firebase/clientAuth"
 import { cn } from "@/lib/utils"
 
 function ResetPasswordForm() {
@@ -91,6 +96,7 @@ function ResetPasswordForm() {
           Request a password reset from the CraveCart sign-in screen. This page must be opened from the Firebase email
           link (includes <span className="font-mono text-[12px] text-white/45">oobCode</span> in the URL).
         </p>
+        <p className="text-[12px] leading-relaxed text-white/42">{FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT}</p>
         <Link
           href="/"
           className="inline-flex w-full items-center justify-center rounded-full border border-white/15 py-3 text-[13px] font-medium text-white/85 transition-colors hover:bg-white/8"

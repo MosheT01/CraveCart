@@ -10,6 +10,7 @@ import {
 import { Eye, EyeOff, ShoppingCart } from "lucide-react"
 import {
   fetchFirebaseBrowserConfig,
+  FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT,
   getFirebaseBrowserApp,
   mapFirebaseAuthError,
   postFirebaseSessionCookie,
@@ -252,6 +253,7 @@ export function LoginScreen({ onAuthed }: LoginScreenProps) {
                   <p className="text-[14px] leading-relaxed text-white/65">
                     If an account exists for that address, Firebase sent a reset link.
                   </p>
+                  <p className="text-[11px] leading-relaxed text-white/42">{FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT}</p>
                   <button
                     type="button"
                     onClick={() => {
