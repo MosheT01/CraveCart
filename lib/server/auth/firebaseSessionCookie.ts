@@ -18,12 +18,13 @@ export function firebaseSessionCookieOptions() {
   }
 }
 
-export async function setFirebaseSessionCookieFromIdToken(idToken: string): Promise<void> {
+export async function setFirebaseSessionCookieFromIdToken(idToken: string): Promise<{ uid: string }> {
   const auth = getFirebaseAdminAuth()
-  await auth.verifyIdToken(idToken)
+  const decoded = await auth.verifyIdToken(idToken)
   const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn: WEEK_MS })
   const cookieStore = await cookies()
   cookieStore.set(FIREBASE_SESSION_COOKIE, sessionCookie, firebaseSessionCookieOptions())
+  return { uid: decoded.uid }
 }
 
 export async function clearFirebaseSessionCookie(): Promise<void> {

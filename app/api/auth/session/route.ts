@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { setFirebaseSessionCookieFromIdToken } from "@/lib/server/auth/firebaseSessionCookie"
 import { firebaseAdminConfigured } from "@/lib/server/firebase/admin"
+import { syncKrogerBrowserSessionForUser } from "@/lib/server/krogerSessionSync"
 
 export const runtime = "nodejs"
 
@@ -23,7 +24,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await setFirebaseSessionCookieFromIdToken(parsed.idToken)
+    const { uid } = await setFirebaseSessionCookieFromIdToken(parsed.idToken)
+    await syncKrogerBrowserSessionForUser(uid)
     return NextResponse.json({ ok: true as const })
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Session failed."

@@ -163,6 +163,13 @@ export interface KrogerHealthResponse {
   authenticated?: boolean
 }
 
+/** Per-browser-session OAuth state from kroger-mcp ``GET /session/status``. */
+export interface KrogerSessionOAuthStatus {
+  ok: boolean
+  configured: boolean
+  authenticated: boolean
+}
+
 export interface KrogerAuthStartResponse {
   authUrl: string
 }

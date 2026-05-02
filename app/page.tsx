@@ -81,18 +81,56 @@ export default function HomePage() {
   const messagesViewportRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const latestMessagesRef = useRef<UiMessage[]>([])
+  const sessionsRef = useRef<ChatSession[]>([])
+  /** Stable sidebar titles — AI-named for new chats, or loaded from Firestore */
+  const resolvedChatTitleRef = useRef<Map<string, string>>(new Map())
+  const aiTitleRequestedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    const pending = localStorage.getItem("cravecart_kroger_pending")
-    if (pending) {
-      localStorage.removeItem("cravecart_kroger_pending")
-      localStorage.setItem("cravecart_kroger_connected", "1")
-      setKrogerConnected(true)
-    } else if (localStorage.getItem("cravecart_kroger_connected")) {
-      setKrogerConnected(true)
-      if (localStorage.getItem("cravecart_kroger_mock")) setKrogerIsMock(true)
-    }
+    sessionsRef.current = sessions
+  }, [sessions])
 
+  async function refreshKrogerFromServer() {
+    try {
+      const pending = localStorage.getItem("cravecart_kroger_pending")
+      if (pending) {
+        localStorage.removeItem("cravecart_kroger_pending")
+        localStorage.setItem("cravecart_kroger_connected", "1")
+      }
+
+      const r = await fetch("/api/kroger/status", { credentials: "same-origin" })
+      if (!r.ok) return
+      const d = (await r.json()) as {
+        authenticated?: boolean
+        mockMode?: boolean
+        needsFirebaseAuth?: boolean
+      }
+      if (d.needsFirebaseAuth) return
+
+      if (d.mockMode) {
+        setKrogerIsMock(true)
+        setKrogerConnected(true)
+        localStorage.setItem("cravecart_kroger_connected", "1")
+        localStorage.setItem("cravecart_kroger_mock", "1")
+        return
+      }
+
+      setKrogerIsMock(false)
+      if (d.authenticated) {
+        setKrogerConnected(true)
+        localStorage.setItem("cravecart_kroger_connected", "1")
+        localStorage.removeItem("cravecart_kroger_mock")
+      } else {
+        setKrogerConnected(false)
+        localStorage.removeItem("cravecart_kroger_connected")
+        localStorage.removeItem("cravecart_kroger_mock")
+      }
+    } catch {
+      // Leave prior UI state on network errors.
+    }
+  }
+
+  useEffect(() => {
     ;(async () => {
       try {
         const meRes = await fetch("/api/auth/me", { credentials: "same-origin" })
@@ -102,6 +140,7 @@ export default function HomePage() {
           setUser(authedUser)
           await loadSessionsForUser(authedUser.id)
           await migrateLocalHistoryIfNeeded()
+          await refreshKrogerFromServer()
         }
       } catch {
         // stay logged out — LoginScreen gates the app
@@ -109,18 +148,6 @@ export default function HomePage() {
         setUserLoaded(true)
       }
     })()
-
-    fetch("/api/kroger/auth/start", { method: "POST" })
-      .then((r) => r.json())
-      .then((data: { mockMode?: boolean }) => {
-        if (data.mockMode) {
-          setKrogerConnected(true)
-          setKrogerIsMock(true)
-          localStorage.setItem("cravecart_kroger_connected", "1")
-          localStorage.setItem("cravecart_kroger_mock", "1")
-        }
-      })
-      .catch(() => {})
   }, [])
 
   async function loadSessionsForUser(_userId: string) {
@@ -129,6 +156,9 @@ export default function HomePage() {
       if (!r.ok) return
       const data = (await r.json()) as { sessions?: ChatSession[] }
       const list = data.sessions ?? []
+      for (const s of list) {
+        if (s.title) resolvedChatTitleRef.current.set(s.id, s.title)
+      }
       setSessions(list)
 
       const last = sessionStorage.getItem("cravecart_active_session")
@@ -187,6 +217,9 @@ export default function HomePage() {
   }
 
   async function handleSelectSessionFromServer(id: string) {
+    const meta = sessions.find((s) => s.id === id)
+    if (meta?.title) resolvedChatTitleRef.current.set(id, meta.title)
+
     setActiveSessionId(id)
     setSidebarOpen(false)
     sessionStorage.setItem("cravecart_active_session", id)
@@ -252,6 +285,7 @@ export default function HomePage() {
     setUser({ id: next.id, name: next.name, email: next.email })
     void loadSessionsForUser(next.id)
     void migrateLocalHistoryIfNeeded()
+    void refreshKrogerFromServer()
   }
 
   async function handleLogout() {
@@ -271,6 +305,19 @@ export default function HomePage() {
   function handleKrogerConnected() {
     setKrogerConnected(true)
     localStorage.setItem("cravecart_kroger_connected", "1")
+    void refreshKrogerFromServer()
+  }
+
+  async function handleKrogerDisconnected() {
+    await fetch("/api/kroger/disconnect", {
+      method: "POST",
+      credentials: "same-origin",
+    })
+    setKrogerConnected(false)
+    setKrogerIsMock(false)
+    localStorage.removeItem("cravecart_kroger_connected")
+    localStorage.removeItem("cravecart_kroger_mock")
+    localStorage.removeItem("cravecart_kroger_pending")
   }
 
   function handleNewChat() {
@@ -315,6 +362,8 @@ export default function HomePage() {
   async function submitPrompt(prompt: string) {
     if (isSending || !krogerConnected) return
 
+    const isFirstUserTurn = messages.length === 0
+
     const userMessage = makeUserMessage(prompt)
     const assistantMessage = makeAssistantPlaceholder()
     const historyForRequest = [...messages, userMessage]
@@ -324,7 +373,6 @@ export default function HomePage() {
       setActiveSessionId(sessionId)
       sessionStorage.setItem("cravecart_active_session", sessionId)
     }
-    const sessionTitle = prompt.length > 42 ? prompt.slice(0, 42) + "…" : prompt
 
     updateMessages(() => [...historyForRequest, assistantMessage])
     setIsSending(true)
@@ -357,7 +405,39 @@ export default function HomePage() {
       }))
     } finally {
       setIsSending(false)
-      persistSession(sessionId, sessionTitle, latestMessagesRef.current)
+
+      const titleForSave = (() => {
+        const fromRef = resolvedChatTitleRef.current.get(sessionId)
+        if (fromRef) return fromRef
+        const fromSidebar = sessionsRef.current.find((s) => s.id === sessionId)?.title
+        if (fromSidebar) return fromSidebar
+        return isFirstUserTurn ? "New chat" : prompt.length > 48 ? `${prompt.slice(0, 45)}…` : prompt
+      })()
+
+      persistSession(sessionId, titleForSave, latestMessagesRef.current)
+
+      if (isFirstUserTurn && !aiTitleRequestedRef.current.has(sessionId)) {
+        aiTitleRequestedRef.current.add(sessionId)
+        void (async () => {
+          try {
+            const tr = await fetch("/api/chat/session-title", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ firstMessage: prompt }),
+            })
+            if (!tr.ok) return
+            const body = (await tr.json()) as { title?: string }
+            const nextTitle = body.title?.trim()
+            if (!nextTitle) return
+            resolvedChatTitleRef.current.set(sessionId, nextTitle)
+            setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title: nextTitle } : s)))
+            persistSession(sessionId, nextTitle, latestMessagesRef.current)
+          } catch {
+            aiTitleRequestedRef.current.delete(sessionId)
+          }
+        })()
+      }
     }
   }
 
@@ -495,6 +575,7 @@ export default function HomePage() {
             isConnected={krogerConnected}
             isMock={krogerIsMock}
             onConnected={handleKrogerConnected}
+            onDisconnected={handleKrogerDisconnected}
           />
         </header>
 

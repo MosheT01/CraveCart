@@ -43,6 +43,14 @@ export function KrogerAuthClient({ initialState }: KrogerAuthClientProps) {
           return
         }
 
+        if (response.status === 401) {
+          setState({
+            mode: "error",
+            message: "Sign in to CraveCart from the home page, then connect Kroger from there.",
+          })
+          return
+        }
+
         if (!response.ok) {
           setState({
             mode: "error",

@@ -1,7 +1,15 @@
 import { devLog } from "@/lib/dev"
 import { getKrogerServiceUrl } from "@/lib/env"
 import { augmentSidecarHeaders } from "@/lib/server/sidecarGatewayFetch"
-import type { CartAddOutcome, CartItemRequest, KrogerAuthCallbackResponse, KrogerAuthStartResponse, KrogerHealthResponse, KrogerProduct } from "@/lib/types"
+import type {
+  CartAddOutcome,
+  CartItemRequest,
+  KrogerAuthCallbackResponse,
+  KrogerAuthStartResponse,
+  KrogerHealthResponse,
+  KrogerProduct,
+  KrogerSessionOAuthStatus,
+} from "@/lib/types"
 
 interface KrogerClientOptions {
   sessionId?: string | null
@@ -53,6 +61,31 @@ export class KrogerClient {
     }
 
     return response.json()
+  }
+
+  /** OAuth linked for this ``X-CraveCart-Session`` (distinct from anonymous ``/health``). */
+  async getSessionOAuthStatus(): Promise<KrogerSessionOAuthStatus> {
+    const url = `${this.baseUrl}/session/status`
+    const headers = await augmentSidecarHeaders(url, this.sessionHeadersInit())
+    const response = await fetch(url, { headers, cache: "no-store" })
+
+    if (!response.ok) {
+      return { ok: false, configured: false, authenticated: false }
+    }
+
+    return response.json() as Promise<KrogerSessionOAuthStatus>
+  }
+
+  async clearRemoteSession(): Promise<void> {
+    const url = `${this.baseUrl}/session/clear`
+    const base = new Headers(this.sessionHeadersInit())
+    const headers = await augmentSidecarHeaders(url, base)
+    const response = await fetch(url, { method: "POST", headers, cache: "no-store" })
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Kroger session clear failed: ${response.status} ${text}`)
+    }
   }
 
   private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
