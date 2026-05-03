@@ -1,5 +1,7 @@
 # CraveCart
 
+**Docs:** [Architecture](./ARCHITECTURE.md)
+
 CraveCart is a hackathon MVP for an agentic food-shopping assistant. A user chats with a Gemini-powered agent that can use YouTube MCP tools, Kroger MCP tools, or both in the same turn.
 
 The core product flows are:
@@ -8,13 +10,21 @@ The core product flows are:
 - buy a simple grocery item like milk
 - use a cooking video to build and buy a grocery list
 
-## Architecture
+## Demo
+
+Walkthrough of CraveCart in action:
+
+[![CraveCart demo — play on YouTube](https://img.youtube.com/vi/wS67vAFTe6k/maxresdefault.jpg)](https://youtu.be/wS67vAFTe6k)
+
+**Watch:** [youtu.be/wS67vAFTe6k](https://youtu.be/wS67vAFTe6k)
+
+## Project layout
 
 - `web`: Next.js App Router app with the chat UI and Gemini agent host
 - `youtube-mcp`: Python MCP service for YouTube search and transcript retrieval
 - `kroger-mcp`: Python MCP service for Kroger auth state, product search, cart writes, and browser OAuth endpoints
 
-For a fuller system walkthrough (including **Firebase sign-in**, **Firestore chat**, **Kroger OAuth**, and **session cookies**), see [ARCHITECTURE.md](./ARCHITECTURE.md).
+Full system design (Firebase, Firestore, Kroger OAuth, agent loop, MCP): **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
 The browser only talks to the Next.js app. **Firebase** handles email/password identity; the server sets an HTTP-only session cookie. **Kroger** tokens stay in the Kroger MCP service and are keyed by a separate opaque **`cravecart_session`** cookie.
 
