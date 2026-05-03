@@ -1,17 +1,24 @@
+/**
+ * Frontend-only stub for agent activity utilities.
+ * Backend will handle actual agent tracing.
+ */
+
 import type { ToolTraceEntry } from "@/lib/types"
 
-export function collapseToolTraces(traces: ToolTraceEntry[]) {
-  const latestById = new Map<string, ToolTraceEntry>()
-  const order: string[] = []
+/**
+ * Collapse tool traces to show only the latest state for each tool call.
+ * This removes duplicate "started" entries when "finished" exists.
+ */
+export function collapseToolTraces(traces: ToolTraceEntry[]): ToolTraceEntry[] {
+  const byId = new Map<string, ToolTraceEntry>()
 
   for (const trace of traces) {
-    if (!latestById.has(trace.id)) {
-      order.push(trace.id)
+    const existing = byId.get(trace.id)
+    // Keep "finished" over "started" for the same ID
+    if (!existing || trace.status === "finished") {
+      byId.set(trace.id, trace)
     }
-    latestById.set(trace.id, trace)
   }
 
-  return order
-    .map((id) => latestById.get(id))
-    .filter((trace): trace is ToolTraceEntry => Boolean(trace))
+  return Array.from(byId.values())
 }

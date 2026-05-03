@@ -1,14 +1,14 @@
-# CraveCart
+# CraveCart (Frontend)
 
-**Docs:** [Architecture](./ARCHITECTURE.md)
+This is the **frontend-only** version of CraveCart, a hackathon MVP for an agentic food-shopping assistant.
 
-CraveCart is a hackathon MVP for an agentic food-shopping assistant. A user chats with a Gemini-powered agent that can use YouTube MCP tools, Kroger MCP tools, or both in the same turn.
+## About
 
-The core product flows are:
+CraveCart is a Next.js application that provides a beautiful chat interface for a Gemini-powered food assistant. Users can:
 
-- ask about a cooking video
-- buy a simple grocery item like milk
-- use a cooking video to build and buy a grocery list
+- Ask about cooking videos
+- Buy grocery items
+- Build and buy grocery lists from cooking videos
 
 ## Demo
 
@@ -18,168 +18,109 @@ Walkthrough of CraveCart in action:
 
 **Watch:** [youtu.be/wS67vAFTe6k](https://youtu.be/wS67vAFTe6k)
 
-## Project layout
-
-- `web`: Next.js App Router app with the chat UI and Gemini agent host
-- `youtube-mcp`: Python MCP service for YouTube search and transcript retrieval
-- `kroger-mcp`: Python MCP service for Kroger auth state, product search, cart writes, and browser OAuth endpoints
-
-Full system design (Firebase, Firestore, Kroger OAuth, agent loop, MCP): **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
-
-The browser only talks to the Next.js app. **Firebase** handles email/password identity; the server sets an HTTP-only session cookie. **Kroger** tokens stay in the Kroger MCP service and are keyed by a separate opaque **`cravecart_session`** cookie.
-
 ## Stack
 
-- Next.js App Router with TypeScript
-- Tailwind CSS
-- Gemini AI Studio via `@google/genai`
-- MCP client in the web app via `@modelcontextprotocol/sdk`
-- Python FastAPI + FastMCP services for YouTube and Kroger
-- Zod validation
-- Docker Compose for local full-stack runs
+- Next.js 16 App Router with TypeScript
+- Tailwind CSS v4
+- Firebase Authentication (client-side)
+- Radix UI primitives
+- Lucide icons
 
-## Required Environment Variables
+## Project Structure
 
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL` default `gemini-2.5-flash`
-- `YOUTUBE_API_KEY`
-- `SUPADATA_API_KEY` optional but recommended for public-video transcript retrieval
-- `KROGER_CLIENT_ID`
-- `KROGER_CLIENT_SECRET`
-- `KROGER_REDIRECT_URI`
-- `KROGER_LOCATION_ID`
-- `APP_BASE_URL`
-- `INTERNAL_SIDECAR_SECRET` (required for Compose if you expose sidecars auth; matches GCP Secret **`INTERNAL_SIDECAR_SECRET`** in Cloud Run prod)
+```
+app/                     # Next.js pages and routes
+  page.tsx               # Main chat interface
+  auth/                  # Auth pages (kroger callback, reset password)
+  layout.tsx             # Root layout with fonts/metadata
+  globals.css            # Global styles and Tailwind config
 
-Firebase (auth + chat persistence):
+components/              # React components
+  LoginScreen.tsx        # Firebase auth login/signup
+  Sidebar.tsx            # Chat history sidebar
+  ChatInput.tsx          # Message input with examples
+  AgentActivityPanel.tsx # Live agent activity display
+  CartReadyCard.tsx      # Shopping cart summary
+  VideoResultCard.tsx    # YouTube video result display
+  OnboardingOverlay.tsx  # Product tour overlay
+  KrogerConnectButton.tsx # Kroger OAuth connection
+  ui/                    # Shared UI primitives
 
-- `FIREBASE_WEB_API_KEY` — Web app API key from the Firebase console
-- `FIREBASE_SERVICE_ACCOUNT_PATH` — path to the Admin SDK JSON on disk (`pnpm dev` / local Node)
-- `FIREBASE_SERVICE_ACCOUNT_JSON` — full JSON blob (production: Secret Manager → Cloud Run)
-- `FIREBASE_SERVICE_ACCOUNT_HOST_PATH` — host path mounted into Docker Compose (`web` reads `/secrets/firebase-sa.json` inside the container)
-- Optional: `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_DOMAIN` if not inferrable or non-default Auth domain
+lib/                     # Utility libraries
+  firebase/              # Firebase client auth
+  chat/                  # Chat history utilities
+  kroger/                # Kroger connect flow
+  onboarding/            # Onboarding state
+  types.ts               # TypeScript types
+  utils.ts               # Shared utilities
+```
 
-Optional local overrides:
+## Environment Variables
 
-- `KROGER_SIDECAR_URL`
-- `KROGER_MCP_URL`
-- `YOUTUBE_SERVICE_URL`
-- `YOUTUBE_MCP_URL`
+Required for Firebase Authentication:
+
+```bash
+NEXT_PUBLIC_FIREBASE_API_KEY=      # Firebase Web API Key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=  # your-project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=   # Firebase Project ID
+```
 
 ## Setup
 
-1. Copy `.env.example` to `.env`.
-2. Fill in Gemini, YouTube, and Kroger values (including `KROGER_LOCATION_ID` for store-scoped search). Set `SUPADATA_API_KEY` too if you want reliable native-caption retrieval when direct transcript scraping is blocked.
-3. Ensure the Kroger developer console lists a redirect URI that exactly matches `KROGER_REDIRECT_URI`.
-
-## Run Locally
-
-### Full stack
-
-```bash
-docker compose up --build
-```
-
-Services:
-
-- `web` on [http://localhost:3000](http://localhost:3000)
-
-`youtube-mcp` and `kroger-mcp` are reachable only inside the Compose network (**not** mapped to host ports); set **`INTERNAL_SIDECAR_SECRET`** in `.env` so only the Next server can call them (see [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md)).
-
-### Google Cloud Run (production)
-
-See [docs/deploy-cloud-run.md](./docs/deploy-cloud-run.md) for Artifact Registry, Secret Manager, [cloudbuild.yaml](./cloudbuild.yaml), OAuth redirects, and scaling notes (`max-instances` on the web service).
-
-### Web app only
-
-This is only useful for UI work if you also point the app at running MCP services.
+1. Install dependencies:
 
 ```bash
 pnpm install
+```
+
+2. Create `.env.local` with your Firebase config:
+
+```bash
+NEXT_PUBLIC_FIREBASE_API_KEY=your-api-key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project-id
+```
+
+3. Run the development server:
+
+```bash
 pnpm dev
 ```
 
-## Chat API
+## Backend Integration
 
-### `POST /api/chat`
+This frontend is designed to connect to external backend APIs:
 
-Streaming SSE-style endpoint used by the frontend chat UI.
+- `/api/auth/me` - Get current user
+- `/api/auth/session` - Create session from Firebase token
+- `/api/auth/logout` - Logout
+- `/api/chat` - Chat streaming endpoint
+- `/api/chat-sessions` - Chat history CRUD
+- `/api/kroger/auth/start` - Kroger OAuth initiation
+- `/api/kroger/status` - Kroger connection status
+- `/api/kroger/disconnect` - Disconnect Kroger
 
-Event types:
+The UI will gracefully handle missing APIs and display appropriate messages.
 
-- `assistant_text_delta`
-- `tool_call_started`
-- `tool_call_finished`
-- `needs_kroger_auth`
-- `cart_ready`
-- `error`
-
-### `POST /api/crave`
-
-Compatibility wrapper over the same agent engine for the original craving demo contract.
-
-### `GET /api/health`
-
-Reports Gemini config, YouTube config, MCP service health, whether Firebase Admin is configured, and non-sensitive deploy metadata (`service`, `revision`, `gitSha`, `checkedAt`) when set.
-
-## Sign-in and chat storage
-
-- **Auth:** Firebase Authentication (email/password) from the main page; password reset uses `/auth/reset-password` with Firebase `oobCode` handling.
-- **Server session:** `POST /api/auth/session` exchanges a Firebase ID token for an HTTP-only cookie; `GET /api/auth/me` exposes the current user to the UI.
-- **Chat history:** Stored in Firestore for signed-in users (`cravecart_user_chats`); deploy rules with `firebase deploy --only firestore:rules` ([`firebase.json`](./firebase.json), [`.firebaserc`](./.firebaserc) default project for the CLI).
-
-## Kroger OAuth
-
-The browser-facing OAuth routes remain in the Next app:
-
-- `/auth/kroger`
-- `/auth/kroger/callback`
-
-Those routes talk to the Kroger MCP service for auth URL creation, code exchange, and token persistence.
-
-## Example Flows
-
-Try these messages:
-
-- `I'm craving an American cheeseburger`
-- `buy milk`
-- `find a good chicken alfredo video and buy the groceries`
-
-Expected cheeseburger flow:
-
-1. The agent searches YouTube for a recipe video.
-2. It retrieves transcript context when available.
-3. If transcript retrieval fails, it loads the seeded fallback cheeseburger recipe.
-4. It searches Kroger products for non-pantry ingredients.
-5. It adds the selected items to the Kroger cart.
-6. The UI ends on `Your Kroger cart is ready`.
-
-## Tests
+## Scripts
 
 ```bash
-pnpm test
-python -m unittest kroger-mcp/test_smoke.py
-pnpm typecheck
-pnpm build
+pnpm dev        # Start development server
+pnpm build      # Build for production
+pnpm start      # Start production server
+pnpm typecheck  # Run TypeScript checks
 ```
 
-Covered areas:
+## Features
 
-- craving normalization
-- fallback recipe lookup
-- Gemini extraction repair path
-- deterministic product ranking
-- explicit buy-intent guard
-- tool-domain routing
-- `/api/crave` compatibility mapping
-- Kroger MCP auth-start and cart aggregation smoke tests
+- Beautiful glass-morphism UI with cinematic effects
+- Real-time chat streaming interface
+- Firebase email/password authentication
+- Kroger OAuth integration (UI ready)
+- Chat session history with sidebar
+- Product onboarding tour
+- Responsive design for mobile and desktop
 
-## Known Limitations
+## License
 
-- YouTube transcripts are best-effort.
-- Real Kroger cart writes require OAuth.
-- The app uses a fixed configured Kroger location.
-- Product matching is heuristic.
-- Signed-in chat history is stored in Firebase Firestore (`cravecart_user_chats`); anonymous/local-only remnants may still migrate from `localStorage` once after login.
-- The agent is intentionally domain-focused and will redirect unrelated prompts back toward food videos and grocery tasks.
-- Supadata transcript fetches run in `mode=native` only, so the app uses existing captions and does not silently switch to AI-generated transcripts.
+MIT

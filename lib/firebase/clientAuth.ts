@@ -12,21 +12,26 @@ export type LoadedFirebaseBrowserConfig = {
 
 export type FirebaseBrowserConfigResponse = LoadedFirebaseBrowserConfig | { configured: false }
 
+/**
+ * Fetch Firebase browser config from environment variables.
+ * In frontend-only mode, these must be set as NEXT_PUBLIC_ env vars.
+ */
 export async function fetchFirebaseBrowserConfig(): Promise<FirebaseBrowserConfigResponse> {
-  const res = await fetch("/api/firebase-public-config", { credentials: "same-origin" })
-  if (!res.ok) return { configured: false }
-  let data: unknown
-  try {
-    data = await res.json()
-  } catch {
+  // Read from Next.js public environment variables
+  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? ""
+  const authDomain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? ""
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? ""
+
+  if (!apiKey.trim() || !projectId.trim() || !authDomain.trim()) {
     return { configured: false }
   }
-  if (!data || typeof data !== "object" || !("configured" in data) || data.configured !== true) {
-    return { configured: false }
+
+  return {
+    configured: true,
+    apiKey,
+    authDomain,
+    projectId,
   }
-  const d = data as LoadedFirebaseBrowserConfig
-  if (!d.apiKey?.trim() || !d.projectId?.trim() || !d.authDomain?.trim()) return { configured: false }
-  return d
 }
 
 export function getFirebaseBrowserApp(cfg: LoadedFirebaseBrowserConfig): FirebaseApp {
@@ -40,32 +45,41 @@ export function getFirebaseBrowserApp(cfg: LoadedFirebaseBrowserConfig): Firebas
   return getApps()[0]!
 }
 
+/**
+ * Post Firebase session cookie to the backend API.
+ * This will be handled by the external backend when connected.
+ */
 export async function postFirebaseSessionCookie(idToken: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const res = await fetch("/api/auth/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ idToken }),
-  })
-  const raw = await res.text()
-
-  let body: { error?: string } = {}
   try {
-    if (raw.trim()) body = JSON.parse(raw) as { error?: string }
-  } catch {
-    // Malformed JSON: only surface as failure when HTTP already indicates error.
-    if (res.ok) return { ok: true }
-    return { ok: false, error: `Server error (${res.status}).` }
-  }
+    const res = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ idToken }),
+    })
+    const raw = await res.text()
 
-  if (!res.ok) return { ok: false, error: body.error || "Could not create session." }
-  return { ok: true }
+    let body: { error?: string } = {}
+    try {
+      if (raw.trim()) body = JSON.parse(raw) as { error?: string }
+    } catch {
+      // Malformed JSON: only surface as failure when HTTP already indicates error.
+      if (res.ok) return { ok: true }
+      return { ok: false, error: `Server error (${res.status}).` }
+    }
+
+    if (!res.ok) return { ok: false, error: body.error || "Could not create session." }
+    return { ok: true }
+  } catch (error) {
+    // In frontend-only mode, the API may not exist yet
+    return { ok: false, error: error instanceof Error ? error.message : "Backend API not available." }
+  }
 }
 
 /**
  * Sends reset email using your app URL when allowed; falls back without `continueUrl`
  * when Firebase rejects it (`auth/unauthorized-continue-uri` — common if **localhost**
- * isn’t under Authentication → **Authorized domains**).
+ * isn't under Authentication → **Authorized domains**).
  */
 export async function sendCravecartPasswordResetEmail(auth: Auth, email: string, appOrigin: string): Promise<void> {
   const origin = appOrigin.replace(/\/$/, "")
@@ -91,7 +105,7 @@ export async function sendCravecartPasswordResetEmail(auth: Auth, email: string,
 export type FirebaseAuthMessageContext = "signIn" | "passwordReset" | "signUp"
 
 /**
- * Outlook/Hotmail “safe links” prefetch URLs and can consume Firebase’s single-use reset code before the user loads
+ * Outlook/Hotmail "safe links" prefetch URLs and can consume Firebase's single-use reset code before the user loads
  * the page; Gmail seldom does this — same app, different inbox behavior.
  */
 export const FIREBASE_RESET_OUTLOOK_SAFELINKS_HINT =
@@ -124,11 +138,11 @@ export function mapFirebaseAuthError(err: unknown, context: FirebaseAuthMessageC
     case "auth/invalid-continue-uri":
       return context === "passwordReset"
         ? "Firebase rejected the reset landing URL. Under Authentication → **Authorized domains**, add `localhost` (and `127.0.0.1` if you use it). You can retry after saving."
-        : "That redirect URL isn’t authorized in Firebase Authentication → Authorized domains."
+        : "That redirect URL isn't authorized in Firebase Authentication → Authorized domains."
     case "auth/operation-not-allowed":
       return context === "passwordReset"
-        ? "Email/password reset isn’t enabled. In Firebase Console → Authentication → Sign-in method, enable **Email/Password**."
-        : "This sign-in method isn’t enabled in Firebase yet."
+        ? "Email/password reset isn't enabled. In Firebase Console → Authentication → Sign-in method, enable **Email/Password**."
+        : "This sign-in method isn't enabled in Firebase yet."
     case "auth/missing-email":
       return "Enter your email address."
     case "auth/network-request-failed":

@@ -1,61 +1,84 @@
-/** Set when navigating away to Kroger OAuth; cleared when connection is verified. */
-export const KROGER_CONNECT_PENDING_STORAGE_KEY = "cravecart_kroger_pending" as const
+/**
+ * Frontend-only stub for Kroger connect flow.
+ * Backend will handle OAuth initiation via API.
+ */
 
-/** DOM event so UI can re-read localStorage (same-tab clears do not emit `storage`). */
+const KROGER_REDIRECT_PENDING_KEY = "cravecart_kroger_redirect_pending"
+
+/**
+ * Storage key for tracking pending Kroger connect handoff.
+ */
+export const KROGER_CONNECT_PENDING_STORAGE_KEY = "cravecart_kroger_connect_pending"
+
+/**
+ * Custom event name for Kroger pending handoff state changes.
+ */
 export const KROGER_PENDING_HANDOFF_EVENT = "cravecart:kroger-pending-handoff"
 
-function notifyKrogerPendingHandoffListeners() {
-  if (typeof window === "undefined") return
-  window.dispatchEvent(new Event(KROGER_PENDING_HANDOFF_EVENT))
-}
-
-export function markKrogerConnectRedirectPending() {
-  if (typeof window === "undefined") return
-  localStorage.setItem(KROGER_CONNECT_PENDING_STORAGE_KEY, "1")
-  notifyKrogerPendingHandoffListeners()
-}
-
-export function clearKrogerConnectRedirectPending() {
-  if (typeof window === "undefined") return
-  if (!localStorage.getItem(KROGER_CONNECT_PENDING_STORAGE_KEY)) return
-  localStorage.removeItem(KROGER_CONNECT_PENDING_STORAGE_KEY)
-  notifyKrogerPendingHandoffListeners()
-}
-
-export type KrogerStartConnectResult =
+export type KrogerConnectResult =
   | { kind: "redirect" }
-  | { kind: "unauthorized" }
+  | { kind: "unauthorized"; message?: string }
   | { kind: "error"; message?: string }
 
 /**
- * Starts Kroger OAuth. On success, redirects the browser and does not return.
+ * Start the Kroger OAuth connect flow.
+ * Calls the backend API to get the auth URL, then redirects.
  */
-export async function startKrogerConnect(): Promise<KrogerStartConnectResult> {
+export async function startKrogerConnect(): Promise<KrogerConnectResult> {
   try {
-    const res = await fetch("/api/kroger/auth/start", {
+    const response = await fetch("/api/kroger/auth/start", {
       method: "POST",
       credentials: "same-origin",
     })
-    const data = (await res.json()) as { authUrl?: string; message?: string; error?: string }
 
-    if (res.status === 401) {
-      return { kind: "unauthorized" }
+    if (response.status === 401) {
+      return { kind: "unauthorized", message: "Sign in to connect your Kroger account." }
     }
 
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { message?: string }
+      return { kind: "error", message: data.message ?? "Could not start Kroger connection." }
+    }
+
+    const data = (await response.json()) as { authUrl?: string }
+    
     if (data.authUrl) {
-      markKrogerConnectRedirectPending()
+      setKrogerConnectRedirectPending()
       window.location.assign(data.authUrl)
       return { kind: "redirect" }
     }
 
+    return { kind: "error", message: "No authorization URL returned." }
+  } catch (error) {
     return {
       kind: "error",
-      message: data.message ?? data.error ?? "Could not start Kroger connection.",
-    }
-  } catch (e) {
-    return {
-      kind: "error",
-      message: e instanceof Error ? e.message : "Network error.",
+      message: error instanceof Error ? error.message : "Network error connecting to Kroger.",
     }
   }
+}
+
+/**
+ * Mark that a Kroger connect redirect is pending.
+ */
+export function setKrogerConnectRedirectPending(): void {
+  if (typeof window !== "undefined") {
+    sessionStorage.setItem(KROGER_REDIRECT_PENDING_KEY, "1")
+  }
+}
+
+/**
+ * Clear the Kroger connect redirect pending flag.
+ */
+export function clearKrogerConnectRedirectPending(): void {
+  if (typeof window !== "undefined") {
+    sessionStorage.removeItem(KROGER_REDIRECT_PENDING_KEY)
+  }
+}
+
+/**
+ * Check if a Kroger connect redirect is pending.
+ */
+export function isKrogerConnectRedirectPending(): boolean {
+  if (typeof window === "undefined") return false
+  return sessionStorage.getItem(KROGER_REDIRECT_PENDING_KEY) === "1"
 }

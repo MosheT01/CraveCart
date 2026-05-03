@@ -1,14 +1,27 @@
-/** Session-only: user tapped "Not now" on the Kroger connect prompt; cleared when agent needs Kroger auth or manual disconnect reconnect flow. */
-export const KROGER_CONNECT_PROMPT_DISMISSED_KEY = "cravecart_kroger_connect_prompt_dismissed"
+/**
+ * Frontend-only stub for Kroger connect prompt session state.
+ * Manages whether the user has dismissed the Kroger connect prompt.
+ */
 
-export function isKrogerConnectPromptDismissed(storage: Pick<Storage, "getItem">): boolean {
-  return storage.getItem(KROGER_CONNECT_PROMPT_DISMISSED_KEY) === "1"
+const KROGER_PROMPT_DISMISSED_KEY = "cravecart_kroger_prompt_dismissed"
+
+/**
+ * Check if the Kroger connect prompt has been dismissed this session.
+ */
+export function isKrogerConnectPromptDismissed(storage: Storage): boolean {
+  return storage.getItem(KROGER_PROMPT_DISMISSED_KEY) === "1"
 }
 
-export function setKrogerConnectPromptDismissed(storage: Pick<Storage, "setItem">): void {
-  storage.setItem(KROGER_CONNECT_PROMPT_DISMISSED_KEY, "1")
+/**
+ * Mark the Kroger connect prompt as dismissed for this session.
+ */
+export function setKrogerConnectPromptDismissed(storage: Storage): void {
+  storage.setItem(KROGER_PROMPT_DISMISSED_KEY, "1")
 }
 
-export function clearKrogerConnectPromptDismissed(storage: Pick<Storage, "removeItem">): void {
-  storage.removeItem(KROGER_CONNECT_PROMPT_DISMISSED_KEY)
+/**
+ * Clear the Kroger connect prompt dismissed state.
+ */
+export function clearKrogerConnectPromptDismissed(storage: Storage): void {
+  storage.removeItem(KROGER_PROMPT_DISMISSED_KEY)
 }

@@ -1,25 +1,34 @@
-import { Link2, Sparkles, Truck } from "lucide-react"
+/**
+ * Frontend-only stub for onboarding narrative content.
+ * Contains the text and structure for the onboarding tour.
+ */
 
-export const ONBOARDING_STEPS = [
+import { ShoppingCart, ListChecks, Truck, type LucideIcon } from "lucide-react"
+
+export interface OnboardingStep {
+  title: string
+  body: string
+  micro: string
+  icon: LucideIcon
+}
+
+export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
-    id: "capture",
-    icon: Link2,
-    title: "Tell us your diet crave or paste a recipe video",
-    body: "Sign into CraveCart first, then you can paste a craving in plain English, add nutrition goals, or drop a YouTube link.",
-    micro: "Example: \"High-protein chicken pasta under 30 minutes.\"",
+    title: "Tell us what you're craving",
+    body: "CraveCart uses AI to understand your food cravings, dietary preferences, and recipe requests. Just type naturally — we'll figure out the rest.",
+    micro: "AI analyzes your request and finds the perfect recipe match from YouTube.",
+    icon: ShoppingCart,
   },
   {
-    id: "gather",
-    icon: Sparkles,
-    title: "AI gathers the recipe intel and fills your Kroger cart",
-    body: "We extract ingredients and map them to real Kroger products. That needs a quick Kroger sign-in (OAuth) — your Kroger password never passes through CraveCart.",
-    micro: "Live parser + ingredient matching + cart-ready output.",
+    title: "We build your grocery list",
+    body: "Once we find a recipe, CraveCart extracts ingredients and matches them to real Kroger products available at your local store.",
+    micro: "Your credentials stay secure — Kroger OAuth means your password never touches CraveCart servers.",
+    icon: ListChecks,
   },
   {
-    id: "checkout",
+    title: "One-click to Kroger checkout",
+    body: "With your Kroger account linked, we can add items directly to your cart. Choose pickup or delivery, then checkout on Kroger's site.",
+    micro: "Select pickup or delivery, confirm your time slot, and complete checkout directly on Kroger.",
     icon: Truck,
-    title: "Sign in to Kroger once — then pickup or delivery stays on Kroger",
-    body: "After linking Kroger from the banner or prompt, checkout and payment happen on Kroger’s site — we connect your agent run to inventory and cart.",
-    micro: "Faster meal planning, less wandering aisles.",
   },
-] as const
+]
