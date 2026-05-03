@@ -3,7 +3,7 @@
   Deploy CraveCart kroger-mcp to Fly.io (hybrid workaround for Akamai on GCP).
   1) Install flyctl: https://fly.io/docs/hands-on/install-flyctl/
   2) In this folder, run: flyctl auth login
-  3) Production (same Kroger keys as Cloud Run): pull from Secret Manager — do NOT use repo .env
+  3) Production (same Kroger keys as Cloud Run): pull from Secret Manager - do NOT use repo .env
 
      .\deploy-fly.ps1 -KrogerRedirectUri "https://YOUR-WEB.run.app/auth/kroger/callback" `
        -FromGcpSecretManager -GcpProject YOUR_GCP_PROJECT
@@ -132,7 +132,7 @@ if ($FromGcpSecretManager) {
 
 if ($UseParentEnv) {
     Write-Host ""
-    Write-Warning "UseParentEnv: reading repo-root .env — for LOCAL DEV only. Production Fly MUST use -FromGcpSecretManager."
+    Write-Warning "UseParentEnv: reading repo-root .env - for LOCAL DEV only. Production Fly MUST use -FromGcpSecretManager."
     Write-Host ""
     $envPath = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
     if (-not (Test-Path $envPath)) { Write-Error "Missing $envPath"; exit 1 }
@@ -188,8 +188,8 @@ flyctl deploy --app $name --remote-only 2>&1
 $url = "$name.fly.dev"
 
 Write-Host "`n--- Done ---"
-Write-Host "Health: https://$url/health"
+Write-Host "Health: https://$($url)/health"
 Write-Host "On Cloud Run cravecart-web, set:"
-Write-Host "  KROGER_SIDECAR_URL=https://$url"
-Write-Host "  KROGER_MCP_URL=https://$url"
+Write-Host "  KROGER_SIDECAR_URL=https://$($url)"
+Write-Host "  KROGER_MCP_URL=https://$($url)"
 Write-Host "Then deploy a new web revision."
