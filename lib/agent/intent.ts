@@ -1,11 +1,22 @@
 import type { ChatMessage, MutationPermissionState } from "@/lib/types"
 
 const BUY_INTENT_PATTERNS = [
-  /\b(buy|order|purchase|shop for|pick up)\b/i,
+  /\b(buy|order|purchase|pick up)\b/i,
+  /\bshop(?:ping)?\s+(?:for|my)\b/i,
   /\b(add|put)\b.{0,24}\bcart\b/i,
   /\bget\b.{0,16}\b(groceries|ingredients)\b/i,
   /\bgrab\b.{0,16}\b(groceries|ingredients|milk|eggs|bread)\b/i,
+  /\bbuy\b.{0,40}\b(groceries|ingredients)\b/i,
+  /\b(checkout|charge)\b.{0,20}\bcart\b/i,
 ]
+
+/** Last N user messages scanned when deciding if this chat already expressed grocery buy intent. */
+const BUY_INTENT_CONVERSATION_LOOKBACK = 14
+
+export function hasExplicitBuyIntentInConversation(messages: ChatMessage[]): boolean {
+  const userTurns = messages.filter((message) => message.role === "user").slice(-BUY_INTENT_CONVERSATION_LOOKBACK)
+  return userTurns.some((message) => hasExplicitBuyIntent(message.content))
+}
 
 const VIDEO_HINT_PATTERNS = [/\byoutube\b/i, /\bvideo\b/i, /\btranscript\b/i, /\brecipe\b/i, /\bcooking\b/i]
 
@@ -80,9 +91,11 @@ export function hasExplicitBuyIntent(message: string): boolean {
 
 export function getMutationPermissionState(messages: ChatMessage[]): MutationPermissionState {
   const latestUserMessage = getLatestUserMessage(messages)
+  const latestAllows = hasExplicitBuyIntent(latestUserMessage)
+  const conversationAllows = hasExplicitBuyIntentInConversation(messages)
   return {
     latestUserMessage,
-    allowCartMutation: hasExplicitBuyIntent(latestUserMessage),
+    allowCartMutation: latestAllows || conversationAllows,
   }
 }
 

@@ -1,11 +1,32 @@
 import { describe, expect, it } from "vitest"
-import { detectUnsupportedCartOperation, hasExplicitBuyIntent, isCartStatusFollowup, isVideoContextFollowup, shouldUseCarryoverContext, suggestToolDomains } from "@/lib/agent/intent"
+import {
+  detectUnsupportedCartOperation,
+  getMutationPermissionState,
+  hasExplicitBuyIntent,
+  hasExplicitBuyIntentInConversation,
+  isCartStatusFollowup,
+  isVideoContextFollowup,
+  shouldUseCarryoverContext,
+  suggestToolDomains,
+} from "@/lib/agent/intent"
+import type { ChatMessage } from "@/lib/types"
 
 describe("agent intent guard", () => {
-  it("allows cart mutation only on explicit buy intent", () => {
+  it("detects explicit buy intent in the latest message", () => {
     expect(hasExplicitBuyIntent("buy milk")).toBe(true)
     expect(hasExplicitBuyIntent("use a cooking video to buy me groceries")).toBe(true)
     expect(hasExplicitBuyIntent("tell me about this burger video")).toBe(false)
+  })
+
+  it("allows cart mutation when buy intent appeared earlier in the thread", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "find a chicken alfredo video and buy the groceries" },
+      { role: "assistant", content: "Here are matches…" },
+      { role: "user", content: "no restrictions" },
+    ]
+    expect(hasExplicitBuyIntentInConversation(messages)).toBe(true)
+    expect(hasExplicitBuyIntent("no restrictions")).toBe(false)
+    expect(getMutationPermissionState(messages).allowCartMutation).toBe(true)
   })
 
   it("detects various buy intent patterns", () => {

@@ -1,6 +1,6 @@
 import { AgentMcpClients } from "@/lib/agent/mcpClient"
 import { getMutationPermissionState } from "@/lib/agent/intent"
-import type { AgentSessionState } from "@/lib/agent/sessionState"
+import type { AgentSessionState, UserPreferences } from "@/lib/agent/sessionState"
 import { readEnv } from "@/lib/env"
 import { formatUsd } from "@/lib/format"
 import { scoreProductMatch } from "@/lib/kroger/productMatcher"
@@ -346,6 +346,21 @@ export class AgentToolRuntime {
   }
 
   createSessionState(): Omit<AgentSessionState, "updatedAt"> {
+    const hasLockedInShopping =
+      this.pendingSelections.size > 0 ||
+      this.latestExtractedRecipe != null ||
+      Boolean(this.latestRecipeText?.trim()) ||
+      this.latestFallbackStructuredRecipe != null
+
+    const impliedPrefs = !this.sessionState?.userPreferences && hasLockedInShopping
+    const defaultPrefs: UserPreferences = {
+      allergies: [],
+      dietary: [],
+      avoidedIngredients: [],
+      other: [],
+      collectedAt: Date.now(),
+    }
+
     return {
       latestArtifact: this.latestArtifact,
       latestCart: this.latestCart,
@@ -356,8 +371,8 @@ export class AgentToolRuntime {
       latestExtractedRecipe: this.latestExtractedRecipe,
       pendingSelections: Array.from(this.pendingSelections.values()),
       unmatchedIngredients: Array.from(this.unmatchedIngredients),
-      userPreferences: this.sessionState?.userPreferences ?? null,
-      preferencesConfirmed: this.sessionState?.preferencesConfirmed ?? false,
+      userPreferences: this.sessionState?.userPreferences ?? (impliedPrefs ? defaultPrefs : null),
+      preferencesConfirmed: Boolean(this.sessionState?.preferencesConfirmed) || impliedPrefs,
     }
   }
 

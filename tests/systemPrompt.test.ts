@@ -25,8 +25,8 @@ describe("system prompt", () => {
 
   it("includes cart mutation rules", () => {
     const prompt = getAgentSystemPrompt("kroger", null)
-    expect(prompt).toContain("Do not mutate the Kroger cart unless")
-    expect(prompt).toContain("explicitly expresses buy intent")
+    expect(prompt).toContain("Cart tools are allowed when")
+    expect(prompt).toContain("add_kroger_items_to_cart exactly once")
   })
 
   it("includes routing hint", () => {

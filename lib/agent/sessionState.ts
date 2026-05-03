@@ -34,6 +34,23 @@ export interface AgentSessionState {
   updatedAt: number
 }
 
+/** Fresh session shape for `setAgentSessionState` before any recipe/cart work. */
+export function createEmptyAgentSessionBase(): Omit<AgentSessionState, "updatedAt"> {
+  return {
+    latestArtifact: null,
+    latestCart: null,
+    latestDish: "",
+    latestRecipeSource: "none",
+    latestRecipeText: null,
+    latestFallbackStructuredRecipe: null,
+    latestExtractedRecipe: null,
+    pendingSelections: [],
+    unmatchedIngredients: [],
+    userPreferences: null,
+    preferencesConfirmed: false,
+  }
+}
+
 type SessionStore = Map<string, AgentSessionState>
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 6
@@ -100,7 +117,29 @@ const ALLERGY_KEYWORDS = [
 ]
 
 export function parseUserPreferences(message: string): UserPreferences | null {
-  const lower = message.toLowerCase()
+  const lower = message.toLowerCase().trim()
+
+  const emptyPrefs = (): UserPreferences => ({
+    allergies: [],
+    dietary: [],
+    avoidedIngredients: [],
+    other: [],
+    collectedAt: Date.now(),
+  })
+
+  if (
+    /\bno restrictions?\b/i.test(lower) ||
+    /\bwithout restrictions?\b/i.test(lower) ||
+    /\bno dietary restrictions?\b/i.test(lower) ||
+    /\beat anything\b/i.test(lower) ||
+    /\bi\s+have\s+no\s+(restrictions?|allergies)\b/i.test(lower) ||
+    /\bi\s+don'?t\s+have\s+any\s+(restrictions?|allergies|dietary)\b/i.test(lower) ||
+    /\bdon'?t\s+have\s+any\s+(restrictions?|allergies)\b/i.test(lower) ||
+    /^\s*(no\s+restrictions?|none|n\/?a)\s*[!.]?\s*$/i.test(lower)
+  ) {
+    return emptyPrefs()
+  }
+
   const allergies: string[] = []
   const dietary: string[] = []
   const avoidedIngredients: string[] = []
@@ -154,6 +193,14 @@ export function isPreferencesConfirmation(message: string, hasPreferences: boole
     }
   }
 
+  return false
+}
+
+/** True when stored prefs include real safety constraints worth one confirmation step. */
+export function preferencesRequireSafetyConfirmation(p: UserPreferences): boolean {
+  if (p.allergies.length > 0 || p.avoidedIngredients.length > 0) return true
+  if (p.dietary.length > 0) return true
+  if (p.other.some((entry) => /\b(allerg|avoid|restriction|medical)\b/i.test(entry))) return true
   return false
 }
 
