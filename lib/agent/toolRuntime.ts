@@ -718,11 +718,12 @@ export class AgentToolRuntime {
         url: result.data.video.url,
         channel: result.data.video.channel,
       },
+      description: result.data.video.description,
       transcriptAvailable: result.data.transcriptAvailable,
       transcriptStatus: result.data.transcriptStatus,
       transcriptMessage: result.data.transcriptMessage,
       recipeSource,
-      summary: recipeText?.slice(0, 280) ?? result.data.video.description ?? summary,
+      summary,
     }
 
     const response = {

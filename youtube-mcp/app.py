@@ -456,6 +456,9 @@ def try_fetch_supadata_transcript_payload(video_id: str) -> tuple[dict[str, Any]
         params={
             "url": f"https://www.youtube.com/watch?v={video_id}",
             "mode": "native",
+            # Supadata can return HTTP 206 for captioned videos when lang is
+            # omitted, even though it can resolve the first available track.
+            "lang": "en",
             "text": "true",
         }
     )
