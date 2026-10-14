@@ -36,6 +36,14 @@ export function VideoResultCard({ video }: VideoResultCardProps) {
       </a>
       <p className="mt-1 text-sm text-white/65">{video.video.channel}</p>
       <p className="mt-4 text-sm leading-7 text-white/80">{video.summary}</p>
+      {video.description ? (
+        <details className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-white/65">
+            Show full video description
+          </summary>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-white/70">{video.description}</p>
+        </details>
+      ) : null}
       <p className="mt-3 text-xs uppercase tracking-[0.2em] text-white/45">
         {transcriptLabel} · source {sourceLabel}
       </p>

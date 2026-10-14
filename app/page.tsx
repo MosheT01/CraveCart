@@ -912,6 +912,7 @@ function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
   return {
     kind: "video",
     video: { title: video.title, url: video.url, channel: video.channel },
+    description: typeof video.description === "string" ? video.description : undefined,
     transcriptAvailable: Boolean(output.transcriptAvailable),
     transcriptStatus:
       output.transcriptStatus === "available" ||
@@ -922,11 +923,7 @@ function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
         : undefined,
     transcriptMessage: typeof output.transcriptMessage === "string" ? output.transcriptMessage : undefined,
     recipeSource,
-    summary:
-      typeof output.recipeText === "string" ? output.recipeText.slice(0, 280)
-      : typeof output.transcript === "string" ? output.transcript.slice(0, 280)
-      : typeof output.transcriptMessage === "string" ? output.transcriptMessage
-      : trace.summary,
+    summary: trace.summary,
   }
 }
 

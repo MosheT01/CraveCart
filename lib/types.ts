@@ -197,6 +197,7 @@ export interface VideoArtifact {
     url: string
     channel: string
   }
+  description?: string
   transcriptAvailable: boolean
   transcriptStatus?: "available" | "unavailable" | "blocked" | "error"
   transcriptMessage?: string
