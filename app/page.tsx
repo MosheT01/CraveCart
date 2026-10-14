@@ -773,22 +773,16 @@ export default function HomePage() {
                         {message.role === "user" ? "You" : "CraveCart"}
                       </p>
                       <div className="mt-2.5">
-                        {message.content ? (
+                        {message.role === "user" && message.content ? (
                           <ChatMarkdown
                             content={message.content.trim()}
-                            tone={message.role === "assistant" ? "assistant" : "user"}
+                            tone="user"
                           />
                         ) : null}
-                        {message.status === "streaming" && !message.content ? (
+                        {message.role === "assistant" && message.status === "streaming" && !message.content ? (
                           <div className="flex items-center gap-2.5 text-white/55">
                             <Loader2 className="h-4 w-4 animate-spin text-primary/70" />
                             <span className="text-[14px]">Working across YouTube and Kroger…</span>
-                          </div>
-                        ) : null}
-                        {message.error ? (
-                          <div className="mt-3 flex items-start gap-2.5 rounded-2xl border border-rose-300/12 bg-rose-500/8 px-4 py-3 text-[13px] text-rose-200">
-                            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-                            <span>{message.error}</span>
                           </div>
                         ) : null}
                       </div>
@@ -807,6 +801,20 @@ export default function HomePage() {
                         />
                       </div>
                     )}
+                    {message.role === "assistant" && message.content ? (
+                      <div className="surface-glass-soft interactive-shimmer mt-4 rounded-[24px] px-5 py-4 text-white">
+                        <p className="text-[10px] uppercase tracking-[0.22em] text-white/35">CraveCart</p>
+                        <div className="mt-2.5">
+                          <ChatMarkdown content={message.content.trim()} tone="assistant" />
+                          {message.error ? (
+                            <div className="mt-3 flex items-start gap-2.5 rounded-2xl border border-rose-300/12 bg-rose-500/8 px-4 py-3 text-[13px] text-rose-200">
+                              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                              <span>{message.error}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                     {message.cart && (
                       <div className="mt-4">
                         <CartReadyCard cart={message.cart} />

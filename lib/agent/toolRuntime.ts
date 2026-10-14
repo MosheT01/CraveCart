@@ -996,8 +996,20 @@ export class AgentToolRuntime {
       }
     }
 
-    const pendingByUpc = new Map(Array.from(this.pendingSelections.values()).map((selection) => [selection.upc, selection]))
-    const requestItems = rawItems
+    const savedSelections = Array.from(this.pendingSelections.values())
+    const effectiveRawItems = remainingIngredients.length === 0 && savedSelections.length > 0
+      ? savedSelections.map((selection) => ({
+          ingredient: selection.ingredient,
+          selectedProduct: selection.selectedProduct,
+          quantity: selection.quantity,
+          unit: selection.unit,
+          priceValue: selection.priceValue,
+          upc: selection.upc,
+          modality: selection.modality,
+        }))
+      : rawItems
+    const pendingByUpc = new Map(savedSelections.map((selection) => [selection.upc, selection]))
+    const requestItems = effectiveRawItems
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .map((item) => {
         const upc = String(item.upc ?? "")
@@ -1030,7 +1042,7 @@ export class AgentToolRuntime {
 
     const resultByUpc = new Map(result.data.results.map((entry) => [entry.upc, entry]))
     const requestByUpc = new Map(requestItems.map((item) => [item.upc, item]))
-    const addedItems = rawItems
+    const addedItems = effectiveRawItems
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .filter((item) => resultByUpc.get(String(item.upc ?? ""))?.success)
       .map((item) => {
@@ -1049,7 +1061,7 @@ export class AgentToolRuntime {
         }
       })
 
-    const failedIngredients = rawItems
+    const failedIngredients = effectiveRawItems
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .filter((item) => !resultByUpc.get(String(item.upc ?? ""))?.success)
       .map((item) => String(item.ingredient ?? item.selectedProduct ?? item.upc ?? "ingredient"))
@@ -1067,7 +1079,7 @@ export class AgentToolRuntime {
     const unmatchedIngredients = Array.from(
       new Set([...(previousCart?.unmatchedIngredients ?? []), ...unmatchedFromModel, ...failedIngredients]),
     ).filter((ingredient) => !mergedItems.some((item) => normalizeIngredientKey(item.ingredient) === normalizeIngredientKey(ingredient)))
-    const status = unmatchedIngredients.length > 0 || addedItems.length < rawItems.length ? "partial_cart_ready" : "cart_ready"
+    const status = unmatchedIngredients.length > 0 || addedItems.length < effectiveRawItems.length ? "partial_cart_ready" : "cart_ready"
     const artifact: CartArtifact = {
       kind: "cart",
       status,
