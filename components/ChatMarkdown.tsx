@@ -7,7 +7,21 @@ interface ChatMarkdownProps {
   tone?: "assistant" | "user"
 }
 
+function normalizeAssistantMarkdown(content: string) {
+  if (!content.trim()) return content
+
+  return content
+    .replace(/\s*\*\*Ingredients:\s*\*?/gi, "\n\n### Ingredients\n\n")
+    .replace(/\s*\*\*Instructions:\s*\*?/gi, "\n\n### Instructions\n\n")
+    .replace(/\s+(Ingredients|Instructions|Directions|Method):\s*/gi, "\n\n### $1\n\n")
+    .replace(/(^|\s)\*\s+/g, "$1\n- ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
 export function ChatMarkdown({ content, tone = "assistant" }: ChatMarkdownProps) {
+  const renderedContent = tone === "assistant" ? normalizeAssistantMarkdown(content) : content
+
   return (
     <div
       className={cn(
@@ -49,7 +63,7 @@ export function ChatMarkdown({ content, tone = "assistant" }: ChatMarkdownProps)
           pre: ({ node: _node, ...props }) => <pre {...props} />,
         }}
       >
-        {content}
+        {renderedContent}
       </ReactMarkdown>
     </div>
   )

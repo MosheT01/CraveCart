@@ -90,6 +90,7 @@ export default function HomePage() {
 
   const messagesViewportRef = useRef<HTMLDivElement | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
+  const shouldAutoScrollRef = useRef(true)
   const latestMessagesRef = useRef<UiMessage[]>([])
   const sessionsRef = useRef<ChatSession[]>([])
   /** Stable sidebar titles — AI-named for new chats, or loaded from Firestore */
@@ -309,6 +310,8 @@ export default function HomePage() {
   }
 
   useEffect(() => {
+    if (!shouldAutoScrollRef.current) return
+
     messagesEndRef.current?.scrollIntoView({
       block: "end",
       behavior: messages.length > 0 ? "smooth" : "auto",
@@ -413,6 +416,8 @@ export default function HomePage() {
 
   async function submitPrompt(prompt: string) {
     if (isSending) return
+
+    shouldAutoScrollRef.current = true
 
     const isFirstUserTurn = messages.length === 0
 
@@ -693,6 +698,11 @@ export default function HomePage() {
               {/* Messages */}
               <div
                 ref={messagesViewportRef}
+                onScroll={(event) => {
+                  const element = event.currentTarget
+                  const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+                  shouldAutoScrollRef.current = distanceFromBottom < 96
+                }}
                 className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-4 pr-1"
               >
                 {/* Welcome screen */}
