@@ -6,6 +6,7 @@ export type { ChatSessionMeta, StoredChatMessage }
 
 const COLLECTION = "cravecart_user_chats"
 const MAX_SESSIONS = 40
+const MAX_FIRESTORE_DOC_BYTES = 900_000
 
 interface UserChatDoc {
   sessions: ChatSessionMeta[]
@@ -48,12 +49,80 @@ async function read(userId: string): Promise<UserChatDoc> {
 }
 
 async function write(userId: string, data: UserChatDoc): Promise<void> {
-  const firestoreData = stripUndefined(data)
+  const firestoreData = compactForFirestore(stripUndefined(data))
   await docRef(userId).set({
     sessions: firestoreData.sessions,
     messagesBySession: firestoreData.messagesBySession,
     agentStateBySession: firestoreData.agentStateBySession,
   })
+}
+
+function byteLength(value: unknown) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8")
+}
+
+export function compactForFirestore(value: any): any {
+  const compacted = {
+    ...value,
+    messagesBySession: Object.fromEntries(
+      Object.entries(value.messagesBySession ?? {}).map(([sessionId, messages]) => [
+        sessionId,
+        (messages as StoredChatMessage[]).map((message) => ({
+          ...message,
+          content: typeof message.content === "string" ? message.content.slice(-8_000) : message.content,
+          video: compactVideo(message.video, 2_000),
+          traces: compactTraces(message.traces),
+        })),
+      ]),
+    ),
+  }
+
+  if (byteLength(compacted) <= MAX_FIRESTORE_DOC_BYTES) return compacted
+
+  const tighter = {
+    ...compacted,
+    messagesBySession: Object.fromEntries(
+      Object.entries(compacted.messagesBySession).map(([sessionId, messages]) => [
+        sessionId,
+        (messages as StoredChatMessage[]).slice(-80).map((message) => ({
+          ...message,
+          content: typeof message.content === "string" ? message.content.slice(-3_000) : message.content,
+          traces: (message.traces ?? []).slice(-24),
+        })),
+      ]),
+    ),
+  }
+
+  if (byteLength(tighter) <= MAX_FIRESTORE_DOC_BYTES) return tighter
+
+  const sessions = [...(tighter.sessions ?? [])]
+  const messagesBySession = { ...tighter.messagesBySession }
+  while (byteLength({ ...tighter, sessions, messagesBySession }) > MAX_FIRESTORE_DOC_BYTES && sessions.length > 1) {
+    const removed = sessions.pop()
+    if (removed) delete messagesBySession[removed.id]
+  }
+
+  return { ...tighter, sessions, messagesBySession }
+}
+
+function compactVideo(value: unknown, descriptionLimit: number) {
+  if (!value || typeof value !== "object") return value
+  const video = value as Record<string, unknown>
+  return {
+    ...video,
+    video: video.video && typeof video.video === "object"
+      ? { ...(video.video as Record<string, unknown>), description: typeof (video.video as Record<string, unknown>).description === "string" ? ((video.video as Record<string, unknown>).description as string).slice(0, descriptionLimit) : (video.video as Record<string, unknown>).description }
+      : video.video,
+    description: typeof video.description === "string" ? video.description.slice(0, descriptionLimit) : video.description,
+  }
+}
+
+function compactTraces(value: unknown[] | undefined) {
+  return (value ?? []).map((trace) => {
+    if (!trace || typeof trace !== "object") return trace
+    const { output: _output, ...rest } = trace as Record<string, unknown>
+    return rest
+  }).slice(-40)
 }
 
 export function stripUndefined(value: unknown): any {
