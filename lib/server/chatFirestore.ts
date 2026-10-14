@@ -48,11 +48,26 @@ async function read(userId: string): Promise<UserChatDoc> {
 }
 
 async function write(userId: string, data: UserChatDoc): Promise<void> {
+  const firestoreData = stripUndefined(data)
   await docRef(userId).set({
-    sessions: data.sessions,
-    messagesBySession: data.messagesBySession,
-    agentStateBySession: data.agentStateBySession,
+    sessions: firestoreData.sessions,
+    messagesBySession: firestoreData.messagesBySession,
+    agentStateBySession: firestoreData.agentStateBySession,
   })
+}
+
+export function stripUndefined(value: unknown): any {
+  if (Array.isArray(value)) {
+    return value.map(stripUndefined)
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, stripUndefined(entry)]),
+    )
+  }
+  return value
 }
 
 export async function getPersistedAgentSessionState(userId: string, sessionId: string): Promise<AgentSessionState | null> {
