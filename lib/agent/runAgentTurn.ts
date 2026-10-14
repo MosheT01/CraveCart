@@ -30,8 +30,8 @@ interface RunAgentTurnInput {
 
 type EventSink = (event: AgentStreamEvent) => Promise<void> | void
 
-const MAX_TOOL_LOOPS = 50
-const MAX_IDENTICAL_TOOL_CALLS = 3
+const MAX_TOOL_LOOPS = 18
+const MAX_IDENTICAL_TOOL_CALLS = 2
 
 export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = () => undefined): Promise<AgentTurnResult> {
   const latestUserMessage = input.messages[input.messages.length - 1]?.content ?? ""

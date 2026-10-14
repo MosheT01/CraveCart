@@ -6,7 +6,7 @@ This script:
 2. Adds the key as a new Secret Manager version for GEMINI_API_KEY.
 3. Rolls a Cloud Run service so it picks up GEMINI_API_KEY:latest.
 4. Verifies the live /api/health endpoint after rollout.
-5. Optionally updates a local .env, preserving the old GEMINI_API_KEY as a comment.
+5. Optionally updates a local .env without retaining the old key value.
 
 It does NOT delete the old Google AI / API Console key resource. Do that manually
 after you confirm production is healthy.
@@ -251,8 +251,6 @@ def update_dotenv(path: pathlib.Path, new_key: str) -> tuple[bool, str | None]:
         if line.startswith("GEMINI_API_KEY="):
             found = True
             old_key = line.split("=", 1)[1]
-            if old_key and old_key != new_key:
-                updated.append(f"# Previous GEMINI_API_KEY={old_key}")
             updated.append(f"GEMINI_API_KEY={new_key}")
         else:
             updated.append(line)
@@ -308,9 +306,7 @@ def main() -> None:
         dotenv_path = pathlib.Path(args.update_dotenv)
         found, old_key = update_dotenv(dotenv_path, new_key)
         if found:
-            print(f"Updated {dotenv_path} and preserved the previous local GEMINI_API_KEY as a comment.")
-            if old_key == new_key:
-                print(f"{dotenv_path} already had the new key; no old value was preserved.")
+            print(f"Updated {dotenv_path}; the previous local GEMINI_API_KEY was not retained.")
         else:
             print(f"Added GEMINI_API_KEY to {dotenv_path}.")
 
