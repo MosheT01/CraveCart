@@ -214,6 +214,7 @@ export async function generateRecipeWrapUp(input: {
               "2. Give 4-6 concise numbered cooking steps for making the dish at home.",
               "3. End with one short paragraph about the cart result and any unmatched ingredients.",
               "4. Do not mention tools, MCP, transcripts, or internal workflow.",
+              "5. Treat the matched grocery items and cart status supplied below as authoritative. Do not invent or claim additional items.",
             ].join("\n\n"),
           },
         ],

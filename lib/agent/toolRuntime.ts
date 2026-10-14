@@ -458,6 +458,7 @@ export class AgentToolRuntime {
       "Give concise step-by-step instructions for making the dish at home. Then mention the cart status in one short paragraph.",
       `Matched cart items:\n${matchedItems}`,
       `Unmatched ingredients: ${unmatched}.`,
+      "Do not claim that an ingredient was added unless it appears in Matched cart items. The verified cart count and matched list above are authoritative.",
     ]
       .filter(Boolean)
       .join("\n\n")

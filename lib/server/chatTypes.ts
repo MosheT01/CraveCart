@@ -10,4 +10,5 @@ export interface StoredChatMessage {
   content: string
   video: unknown | null
   cart: unknown | null
+  traces?: unknown[]
 }

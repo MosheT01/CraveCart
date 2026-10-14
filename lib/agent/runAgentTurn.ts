@@ -19,21 +19,27 @@ import {
   createEmptyAgentSessionBase,
 } from "@/lib/agent/sessionState"
 import { devLog } from "@/lib/dev"
+import { getPersistedAgentSessionState, setPersistedAgentSessionState } from "@/lib/server/chatFirestore"
 import type { AgentStreamEvent, AgentTurnResult, ChatMessage, ToolTraceEntry } from "@/lib/types"
 
 interface RunAgentTurnInput {
   messages: ChatMessage[]
   sessionId: string
+  userId?: string
 }
 
 type EventSink = (event: AgentStreamEvent) => Promise<void> | void
 
-const MAX_TOOL_LOOPS = 50
+const MAX_TOOL_LOOPS = 18
+const MAX_IDENTICAL_TOOL_CALLS = 2
 
 export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = () => undefined): Promise<AgentTurnResult> {
   const latestUserMessage = input.messages[input.messages.length - 1]?.content ?? ""
 
-  let sessionForTurn = getAgentSessionState(input.sessionId)
+  let sessionForTurn = input.userId
+    ? await getPersistedAgentSessionState(input.userId, input.sessionId)
+    : getAgentSessionState(input.sessionId)
+  sessionForTurn ??= getAgentSessionState(input.sessionId)
   const voluntaryPrefs = parseUserPreferences(latestUserMessage)
   if (voluntaryPrefs) {
     const base = sessionForTurn ?? createEmptyAgentSessionBase()
@@ -47,6 +53,7 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
   const toolRuntime = new AgentToolRuntime(input.messages, input.sessionId, sessionForTurn)
   const activity: ToolTraceEntry[] = []
+  const toolCallCounts = new Map<string, number>()
   const contents: unknown[] = toGeminiContents(input.messages)
   const systemInstruction = getAgentSystemPrompt(suggestToolDomains(latestUserMessage), sessionForTurn?.userPreferences ?? null)
   let forceTextReply = false
@@ -424,6 +431,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
             assistantMessage = toolRuntime.buildLocalRecipeWrapUp() ?? assistantMessage
           }
         }
+        if (turnCart) {
+          assistantMessage = appendVerifiedCartSummary(assistantMessage, turnCart)
+        }
         const streamedMessage = assistantMessage || fallbackAssistantMessage(turnCart, turnArtifact)
 
         for (const chunk of chunkTextForStreaming(streamedMessage)) {
@@ -463,6 +473,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
       for (const call of functionCalls) {
         const traceId = call.id || randomTraceId()
+        const callKey = `${call.name}:${stableToolArguments(call.args)}`
+        const callCount = (toolCallCounts.get(callKey) ?? 0) + 1
+        toolCallCounts.set(callKey, callCount)
         const startedTrace: ToolTraceEntry = {
           id: traceId,
           name: call.name,
@@ -475,6 +488,29 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
           type: "tool_call_started",
           trace: startedTrace,
         })
+
+        if (callCount > MAX_IDENTICAL_TOOL_CALLS) {
+          const summary = `Skipped repeated ${call.name} call so the request can finish.`
+          const finishedTrace: ToolTraceEntry = {
+            id: traceId,
+            name: call.name,
+            status: "finished",
+            summary,
+            arguments: call.args,
+            output: { ok: false, repeated: true, message: summary },
+          }
+          activity.push(finishedTrace)
+          await sink({ type: "tool_call_finished", trace: finishedTrace })
+          functionResponses.push({
+            functionResponse: {
+              id: call.id,
+              name: call.name,
+              response: { ok: false, repeated: true, message: summary },
+            },
+          })
+          forceTextReply = true
+          continue
+        }
 
         const outcome = await toolRuntime.execute(call.name, call.args)
         if (outcome.artifact) {
@@ -544,7 +580,19 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
       forcedShoppingContinuation = false
     }
 
-    throw new Error("The agent hit the maximum tool-call loop limit.")
+    const assistantMessage =
+      "I stopped the automated shopping steps after repeated tool calls. The progress above is the reliable part of the result; you can ask me to retry the unresolved items."
+    for (const chunk of chunkTextForStreaming(assistantMessage)) {
+      await sink({ type: "assistant_text_delta", delta: chunk })
+    }
+    return {
+      assistantMessage,
+      activity,
+      artifact: turnArtifact,
+      cart: turnCart,
+      needsAuth: false,
+      authUrl: null,
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "CraveCart hit an unexpected agent error."
     devLog("agent_error", message)
@@ -554,9 +602,27 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
     })
     throw error
   } finally {
-    setAgentSessionState(input.sessionId, toolRuntime.createSessionState())
+    const nextState = toolRuntime.createSessionState()
+    setAgentSessionState(input.sessionId, nextState)
+    if (input.userId) {
+      await setPersistedAgentSessionState(input.userId, input.sessionId, nextState)
+    }
     await toolRuntime.close()
   }
+}
+
+function stableToolArguments(args: Record<string, unknown>) {
+  return JSON.stringify(args, Object.keys(args).sort())
+}
+
+function appendVerifiedCartSummary(message: string, cart: NonNullable<AgentTurnResult["cart"]>) {
+  const matched = cart.items.length > 0
+    ? cart.items.map((item) => `${item.ingredient} (${item.selectedProduct})`).join(", ")
+    : "none"
+  const unresolved = cart.unmatchedIngredients.length > 0 ? cart.unmatchedIngredients.join(", ") : "none"
+  const status = cart.status === "partial_cart_ready" ? "partially ready" : "ready"
+
+  return `${message.trim()}\n\nVerified cart result: ${cart.itemsAdded} item(s) were successfully added; the cart is ${status}. Matched items: ${matched}. Unresolved ingredients: ${unresolved}. Estimated total: ${cart.estimatedTotal}.`
 }
 
 function fallbackAssistantMessage(cart: AgentTurnResult["cart"], artifact: AgentTurnResult["artifact"]) {

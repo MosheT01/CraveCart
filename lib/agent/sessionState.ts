@@ -145,14 +145,17 @@ export function parseUserPreferences(message: string): UserPreferences | null {
   const avoidedIngredients: string[] = []
   const other: string[] = []
 
+  const allergyContext = /\b(allerg(?:y|ies)|allergic|intoleran|can't eat|cannot eat|must avoid|avoid(?:ing)?|no)\b/i.test(lower)
+  const dietaryContext = /\b(diet|dietary|prefer|preference|restriction|restrict|vegan|vegetarian|halal|kosher|keto|gluten[- ]?free|dairy[- ]?free|nut[- ]?free)\b/i.test(lower)
+
   for (const a of ALLERGY_KEYWORDS) {
-    if (lower.includes(a)) {
+    if (allergyContext && new RegExp(`\\b${a}\\b`, "i").test(lower)) {
       allergies.push(a.replace(/[^a-z]/g, ""))
     }
   }
 
   for (const d of DIETARY_KEYWORDS) {
-    if (lower.includes(d.toLowerCase())) {
+    if (dietaryContext && lower.includes(d.toLowerCase().trim())) {
       dietary.push(d.toLowerCase().replace(/[^a-z]/g, ""))
     }
   }
@@ -207,6 +210,16 @@ export function preferencesRequireSafetyConfirmation(p: UserPreferences): boolea
 export function getUpdatedPreferencesFromResponse(message: string, currentPrefs: UserPreferences): UserPreferences | null {
   const parsed = parseUserPreferences(message)
   if (!parsed) return null
+
+  if (
+    parsed.allergies.length === 0 &&
+    parsed.dietary.length === 0 &&
+    parsed.avoidedIngredients.length === 0 &&
+    parsed.other.length === 0 &&
+    /\b(no|none|without|don't|do not)\b.*\b(restriction|allerg|dietary|avoid)/i.test(message)
+  ) {
+    return parsed
+  }
 
   return {
     allergies: parsed.allergies.length > 0 ? parsed.allergies : currentPrefs.allergies,

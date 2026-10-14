@@ -67,6 +67,7 @@ interface StoredMessage {
   content: string
   video: VideoArtifact | null
   cart: CartArtifact | null
+  traces?: ToolTraceEntry[]
 }
 
 interface User {
@@ -278,7 +279,7 @@ export default function HomePage() {
             role: m.role,
             content: coerceReplayMessageContent(m.role, m.content),
             status: "idle",
-            traces: [],
+            traces: m.traces ?? [],
             video: m.video as VideoArtifact | null,
             cart: m.cart as CartArtifact | null,
             authUrl: null,
@@ -296,7 +297,7 @@ export default function HomePage() {
         role: m.role,
         content: coerceReplayMessageContent(m.role, m.content),
         status: "idle",
-        traces: [],
+        traces: m.traces ?? [],
         video: m.video as VideoArtifact | null,
         cart: m.cart as CartArtifact | null,
         authUrl: null,
@@ -389,6 +390,7 @@ export default function HomePage() {
       content: m.content,
       video: m.video,
       cart: m.cart,
+      traces: m.traces,
     }))
     localStorage.setItem(`cravecart_session_${sessionId}`, JSON.stringify(stored))
 

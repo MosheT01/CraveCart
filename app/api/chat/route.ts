@@ -48,6 +48,7 @@ export async function POST(request: Request) {
           {
             messages: payload!.messages,
             sessionId,
+            userId: authedUser.id,
           },
           async (event) => {
             send(event.type, event)
