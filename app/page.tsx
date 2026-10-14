@@ -767,36 +767,38 @@ export default function HomePage() {
                     key={message.id}
                     className={message.role === "user" ? "ml-auto max-w-xl" : "mr-auto w-full max-w-full"}
                   >
-                    <div
-                      className={
-                        message.role === "user"
-                          ? "interactive-shimmer rounded-[22px] border border-primary/16 bg-gradient-to-br from-primary/14 to-primary/8 px-5 py-3.5 text-white shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
-                          : "surface-glass-soft interactive-shimmer rounded-[24px] px-5 py-4 text-white"
-                      }
-                    >
-                      <p
-                        className={cn(
-                          "text-[10px] uppercase tracking-[0.22em]",
-                          message.role === "user" ? "text-primary/70" : "text-white/35"
-                        )}
+                    {(message.role === "user" || message.content || message.status === "streaming") && (
+                      <div
+                        className={
+                          message.role === "user"
+                            ? "interactive-shimmer rounded-[22px] border border-primary/16 bg-gradient-to-br from-primary/14 to-primary/8 px-5 py-3.5 text-white shadow-[0_8px_30px_rgba(0,0,0,0.2)]"
+                            : "surface-glass-soft interactive-shimmer rounded-[24px] px-5 py-4 text-white"
+                        }
                       >
-                        {message.role === "user" ? "You" : "CraveCart"}
-                      </p>
-                      <div className="mt-2.5">
-                        {message.role === "user" && message.content ? (
-                          <ChatMarkdown
-                            content={message.content.trim()}
-                            tone="user"
-                          />
-                        ) : null}
-                        {message.role === "assistant" && message.status === "streaming" && !message.content ? (
-                          <div className="flex items-center gap-2.5 text-white/55">
-                            <Loader2 className="h-4 w-4 animate-spin text-primary/70" />
-                            <span className="text-[14px]">Working across YouTube and Kroger…</span>
-                          </div>
-                        ) : null}
+                        <p
+                          className={cn(
+                            "text-[10px] uppercase tracking-[0.22em]",
+                            message.role === "user" ? "text-primary/70" : "text-white/35"
+                          )}
+                        >
+                          {message.role === "user" ? "You" : "CraveCart"}
+                        </p>
+                        <div className="mt-2.5">
+                          {message.role === "user" && message.content ? (
+                            <ChatMarkdown
+                              content={message.content.trim()}
+                              tone="user"
+                            />
+                          ) : null}
+                          {message.role === "assistant" && message.status === "streaming" && !message.content ? (
+                            <div className="flex items-center gap-2.5 text-white/55">
+                              <Loader2 className="h-4 w-4 animate-spin text-primary/70" />
+                              <span className="text-[14px]">Working across YouTube and Kroger…</span>
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {message.video && (
                       <div className="mt-4">
