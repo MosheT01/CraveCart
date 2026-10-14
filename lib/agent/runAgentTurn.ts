@@ -426,6 +426,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
             assistantMessage = toolRuntime.buildLocalRecipeWrapUp() ?? assistantMessage
           }
         }
+        if (turnCart) {
+          assistantMessage = appendVerifiedCartSummary(assistantMessage, turnCart)
+        }
         const streamedMessage = assistantMessage || fallbackAssistantMessage(turnCart, turnArtifact)
 
         for (const chunk of chunkTextForStreaming(streamedMessage)) {
@@ -601,6 +604,16 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
 function stableToolArguments(args: Record<string, unknown>) {
   return JSON.stringify(args, Object.keys(args).sort())
+}
+
+function appendVerifiedCartSummary(message: string, cart: NonNullable<AgentTurnResult["cart"]>) {
+  const matched = cart.items.length > 0
+    ? cart.items.map((item) => `${item.ingredient} (${item.selectedProduct})`).join(", ")
+    : "none"
+  const unresolved = cart.unmatchedIngredients.length > 0 ? cart.unmatchedIngredients.join(", ") : "none"
+  const status = cart.status === "partial_cart_ready" ? "partially ready" : "ready"
+
+  return `${message.trim()}\n\nVerified cart result: ${cart.itemsAdded} item(s) were successfully added; the cart is ${status}. Matched items: ${matched}. Unresolved ingredients: ${unresolved}. Estimated total: ${cart.estimatedTotal}.`
 }
 
 function fallbackAssistantMessage(cart: AgentTurnResult["cart"], artifact: AgentTurnResult["artifact"]) {
