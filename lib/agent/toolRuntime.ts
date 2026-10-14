@@ -430,20 +430,20 @@ export class AgentToolRuntime {
         ? `Video context:\n${this.latestArtifact.summary}`
         : "Use the recipe or video context already in the conversation."
 
-    const hasCompletePendingSelections = remainingIngredients.length === 0 && this.pendingSelections.size > 0
+    const hasPendingSelections = this.pendingSelections.size > 0
 
     return [
       "Server note: the user explicitly asked you to buy groceries in this same turn, and you have not completed the grocery workflow yet.",
       "Continue now. Do not ask whether to proceed.",
       context,
-      hasCompletePendingSelections
-        ? "All grocery ingredients already have saved Kroger selections from the previous turn. Call add_kroger_items_to_cart directly with those saved selections; do not repeat extract_recipe_ingredients or search_kroger_products."
+      hasPendingSelections
+        ? "You already have valid Kroger selections. Call add_kroger_items_to_cart now with those saved selections; do not repeat product searches just because some ingredients remain unresolved."
         : "First call extract_recipe_ingredients so you have structured ingredients with quantities and units.",
-      hasCompletePendingSelections
+      hasPendingSelections
         ? "Use every saved pending selection, preserving its UPC and retail quantity, and add the full batch once."
         : "Skip pantry staples, search Kroger for the remaining items, preserve the extracted quantity/unit when you call search_kroger_products, and add enough package quantity to cover the recipe.",
-      hasCompletePendingSelections
-        ? "Do not search Kroger again unless a saved selection is missing a UPC."
+      hasPendingSelections
+        ? "It is valid to finish with unmatched ingredients. The cart summary must list them as unresolved instead of retrying indefinitely."
         : "Search all remaining grocery ingredients first, then call add_kroger_items_to_cart once at the end with the full matched batch.",
       "If a match is weak or absurd, leave that ingredient unmatched instead of forcing a bad product.",
     ].join("\n\n")
@@ -985,19 +985,11 @@ export class AgentToolRuntime {
     const video = isVideoMeta(args.video) ? args.video : undefined
 
     const remainingIngredients = this.getRemainingIngredientNames()
-    if (remainingIngredients.length > 0) {
-      return {
-        response: {
-          ok: false,
-          ready: false,
-          remainingIngredients,
-        },
-        summary: `Continue matching ingredients before adding to cart: ${remainingIngredients.slice(0, 6).join(", ")}${remainingIngredients.length > 6 ? ", ..." : ""}.`,
-      }
-    }
 
     const savedSelections = Array.from(this.pendingSelections.values())
-    const effectiveRawItems = remainingIngredients.length === 0 && savedSelections.length > 0
+    // Add confident selections even when some recipe ingredients remain
+    // unresolved; the cart artifact reports those ingredients explicitly.
+    const effectiveRawItems = savedSelections.length > 0
       ? savedSelections.map((selection) => ({
           ingredient: selection.ingredient,
           selectedProduct: selection.selectedProduct,
@@ -1077,7 +1069,12 @@ export class AgentToolRuntime {
     const estimatedTotalValue = mergedItems.reduce((sum, item) => sum + parsePriceValue(item), 0)
 
     const unmatchedIngredients = Array.from(
-      new Set([...(previousCart?.unmatchedIngredients ?? []), ...unmatchedFromModel, ...failedIngredients]),
+      new Set([
+        ...(previousCart?.unmatchedIngredients ?? []),
+        ...remainingIngredients,
+        ...unmatchedFromModel,
+        ...failedIngredients,
+      ]),
     ).filter((ingredient) => !mergedItems.some((item) => normalizeIngredientKey(item.ingredient) === normalizeIngredientKey(ingredient)))
     const status = unmatchedIngredients.length > 0 || addedItems.length < effectiveRawItems.length ? "partial_cart_ready" : "cart_ready"
     const artifact: CartArtifact = {
