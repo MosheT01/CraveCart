@@ -585,7 +585,7 @@ export default function HomePage() {
           status: "idle",
           cart: event.cart,
           traces: event.activity,
-          video: event.artifact ?? c.video,
+          video: event.artifact ?? null,
         }))
         break
       case "error":

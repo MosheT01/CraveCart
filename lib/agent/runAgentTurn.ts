@@ -246,7 +246,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
         }
 
         const latestArtifact = toolRuntime.getLatestArtifact()
-        const videoArtifact = latestArtifact?.kind === "video" ? latestArtifact : null
+        const videoArtifact = activity.some((trace) => trace.name === "search_youtube_videos" || trace.name === "get_video_context") && latestArtifact?.kind === "video"
+          ? latestArtifact
+          : null
         await sink({
           type: "cart_ready",
           message: assistantMessage,
@@ -448,7 +450,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
         if (turnCart) {
           const latestArtifact = toolRuntime.getLatestArtifact()
-          const videoArtifact = latestArtifact?.kind === "video" ? latestArtifact : null
+          const videoArtifact = activity.some((trace) => trace.name === "search_youtube_videos" || trace.name === "get_video_context") && latestArtifact?.kind === "video"
+            ? latestArtifact
+            : null
           await sink({
             type: "cart_ready",
             message: streamedMessage,

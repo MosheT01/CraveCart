@@ -13,7 +13,7 @@ function normalizeAssistantMarkdown(content: string) {
   return content
     .replace(/\s*\*\*Ingredients:\s*\*?/gi, "\n\n### Ingredients\n\n")
     .replace(/\s*\*\*Instructions:\s*\*?/gi, "\n\n### Instructions\n\n")
-    .replace(/\s+(Ingredients|Instructions|Directions|Method):\s*/gi, "\n\n### $1\n\n")
+    .replace(/\s+(Instructions|Directions|Method):\s*/gi, "\n\n### $1\n\n")
     .replace(/\s+###\s+Cart verification\b/gi, "\n\n### Cart verification\n\n")
     .replace(/(^|\s)\*\s+/g, "$1\n- ")
     .replace(/\s+\*(?=[A-Z])/g, "\n- ")
