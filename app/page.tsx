@@ -84,6 +84,7 @@ export default function HomePage() {
   const [krogerConnected, setKrogerConnected] = useState(false)
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const skipSessionRestoreRef = useRef(false)
   const [messages, setMessages] = useState<UiMessage[]>([])
   const [isSending, setIsSending] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -205,7 +206,7 @@ export default function HomePage() {
       setSessions(list)
 
       const last = sessionStorage.getItem("cravecart_active_session")
-      if (last && list.some((s) => s.id === last)) {
+      if (!skipSessionRestoreRef.current && last && list.some((s) => s.id === last)) {
         handleSelectSessionFromServer(last)
       }
     } catch {
@@ -375,6 +376,7 @@ export default function HomePage() {
   }
 
   function handleNewChat() {
+    skipSessionRestoreRef.current = true
     setMessages([])
     latestMessagesRef.current = []
     setActiveSessionId(null)
@@ -383,6 +385,7 @@ export default function HomePage() {
   }
 
   function handleSelectSession(id: string) {
+    skipSessionRestoreRef.current = false
     void handleSelectSessionFromServer(id)
   }
 
