@@ -86,6 +86,9 @@ export function getLatestUserMessage(messages: ChatMessage[]): string {
 
 export function hasExplicitBuyIntent(message: string): boolean {
   const normalized = message.trim().toLowerCase()
+  if (/\b(?:don'?t|do not|did not|didn'?t|never|without)\s+(?:buy|buying|add|adding|order|ordering|purchase|purchasing|get|getting|put|putting)\b/i.test(normalized)) {
+    return false
+  }
   return BUY_INTENT_PATTERNS.some((pattern) => pattern.test(normalized))
 }
 

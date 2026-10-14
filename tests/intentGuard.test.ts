@@ -44,6 +44,8 @@ describe("agent intent guard", () => {
     expect(hasExplicitBuyIntent("tell me the recipe")).toBe(false)
     expect(hasExplicitBuyIntent("show me cooking videos")).toBe(false)
     expect(hasExplicitBuyIntent("how do I make pasta")).toBe(false)
+    expect(hasExplicitBuyIntent("prepare the ingredients, but don't add anything to my cart")).toBe(false)
+    expect(hasExplicitBuyIntent("find the groceries without buying them")).toBe(false)
   })
 
   it("suggests the correct tool domains", () => {
