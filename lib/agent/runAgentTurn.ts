@@ -622,7 +622,15 @@ function appendVerifiedCartSummary(message: string, cart: NonNullable<AgentTurnR
   const unresolved = cart.unmatchedIngredients.length > 0 ? cart.unmatchedIngredients.join(", ") : "none"
   const status = cart.status === "partial_cart_ready" ? "partially ready" : "ready"
 
-  return `${message.trim()}\n\nVerified cart result: ${cart.itemsAdded} item(s) were successfully added; the cart is ${status}. Matched items: ${matched}. Unresolved ingredients: ${unresolved}. Estimated total: ${cart.estimatedTotal}.`
+  return [
+    message.trim(),
+    "",
+    "### Cart verification",
+    `- **Status:** ${cart.itemsAdded} item(s) successfully added; the cart is ${status}.`,
+    `- **Matched items:** ${matched}`,
+    `- **Unresolved ingredients:** ${unresolved}`,
+    `- **Estimated total:** ${cart.estimatedTotal}`,
+  ].join("\n")
 }
 
 function fallbackAssistantMessage(cart: AgentTurnResult["cart"], artifact: AgentTurnResult["artifact"]) {
