@@ -996,13 +996,18 @@ export class AgentToolRuntime {
       }
     }
 
+    const pendingByUpc = new Map(Array.from(this.pendingSelections.values()).map((selection) => [selection.upc, selection]))
     const requestItems = rawItems
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-      .map((item) => ({
-        upc: String(item.upc ?? ""),
-        quantity: normalizeCartQuantity(item.quantity),
-        modality: item.modality === "DELIVERY" ? "DELIVERY" : "PICKUP",
-      }))
+      .map((item) => {
+        const upc = String(item.upc ?? "")
+        const pending = pendingByUpc.get(upc)
+        return {
+          upc,
+          quantity: pending?.quantity ?? normalizeCartQuantity(item.quantity),
+          modality: pending?.modality ?? (item.modality === "DELIVERY" ? "DELIVERY" : "PICKUP"),
+        }
+      })
       .filter((item) => item.upc)
 
     const result = await this.mcpClients.callKrogerTool<KrogerCartAddResult>("add_kroger_items_to_cart", {
@@ -1029,16 +1034,18 @@ export class AgentToolRuntime {
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .filter((item) => resultByUpc.get(String(item.upc ?? ""))?.success)
       .map((item) => {
-        const quantity = requestByUpc.get(String(item.upc ?? ""))?.quantity ?? normalizeCartQuantity(item.quantity)
-        const unitPrice = Number(item.priceValue ?? 0) || 0
+        const upc = String(item.upc ?? "")
+        const pending = pendingByUpc.get(upc)
+        const quantity = requestByUpc.get(upc)?.quantity ?? normalizeCartQuantity(item.quantity)
+        const unitPrice = pending?.priceValue ?? (Number(item.priceValue ?? 0) || 0)
 
         return {
-          ingredient: String(item.ingredient ?? item.selectedProduct ?? "ingredient"),
-          selectedProduct: String(item.selectedProduct ?? "Kroger item"),
+          ingredient: pending?.ingredient ?? String(item.ingredient ?? item.selectedProduct ?? "ingredient"),
+          selectedProduct: pending?.selectedProduct ?? String(item.selectedProduct ?? "Kroger item"),
           quantity,
-          unit: typeof item.unit === "string" && item.unit.trim() ? item.unit : "unit",
+          unit: pending?.unit ?? (typeof item.unit === "string" && item.unit.trim() ? item.unit : "unit"),
           price: formatUsd(unitPrice * quantity),
-          upc: String(item.upc ?? ""),
+          upc,
         }
       })
 

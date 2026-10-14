@@ -49,4 +49,20 @@ describe("estimateCartQuantity", () => {
 
     expect(quantity).toBe(2)
   })
+
+  it("converts gram recipe quantities into retail package counts", () => {
+    const quantity = estimateCartQuantity(
+      {
+        normalizedName: "ground beef",
+        quantity: 550,
+        unit: "g",
+        category: "meat",
+      },
+      {
+        size: "1 lb",
+      },
+    )
+
+    expect(quantity).toBe(2)
+  })
 })
