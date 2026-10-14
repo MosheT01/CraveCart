@@ -259,6 +259,7 @@ export type AgentStreamEvent =
       type: "cart_ready"
       message: string
       cart: CartArtifact
+      artifact?: VideoArtifact | null
       activity: ToolTraceEntry[]
     }
   | {

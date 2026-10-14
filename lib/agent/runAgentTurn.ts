@@ -245,10 +245,13 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
           })
         }
 
+        const latestArtifact = toolRuntime.getLatestArtifact()
+        const videoArtifact = latestArtifact?.kind === "video" ? latestArtifact : null
         await sink({
           type: "cart_ready",
           message: assistantMessage,
           cart: latestCart,
+          artifact: videoArtifact,
           activity,
         })
 
@@ -444,10 +447,13 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
         }
 
         if (turnCart) {
+          const latestArtifact = toolRuntime.getLatestArtifact()
+          const videoArtifact = latestArtifact?.kind === "video" ? latestArtifact : null
           await sink({
             type: "cart_ready",
             message: streamedMessage,
             cart: turnCart,
+            artifact: videoArtifact,
             activity,
           })
         } else if (turnArtifact?.kind === "video" && toolRuntime.getPermissionState().allowCartMutation === false) {
