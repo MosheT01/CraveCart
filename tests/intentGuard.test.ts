@@ -54,6 +54,7 @@ describe("agent intent guard", () => {
 
   it("detects follow-up turns that should reuse prior recipe context", () => {
     expect(shouldUseCarryoverContext("buy them for me")).toBe(true)
+    expect(shouldUseCarryoverContext("do buy it")).toBe(true)
     expect(shouldUseCarryoverContext("did you buy all the ingredients")).toBe(true)
     expect(shouldUseCarryoverContext("what does the transcript say")).toBe(true)
     expect(shouldUseCarryoverContext("transcript?")).toBe(true)
