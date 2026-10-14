@@ -86,10 +86,16 @@ export function getLatestUserMessage(messages: ChatMessage[]): string {
 
 export function hasExplicitBuyIntent(message: string): boolean {
   const normalized = message.trim().toLowerCase()
-  if (/\b(?:don'?t|do not|did not|didn'?t|never|without)\s+(?:buy|buying|add|adding|order|ordering|purchase|purchasing|get|getting|put|putting)\b/i.test(normalized)) {
+  if (hasExplicitNoBuyIntent(normalized)) {
     return false
   }
   return BUY_INTENT_PATTERNS.some((pattern) => pattern.test(normalized))
+}
+
+export function hasExplicitNoBuyIntent(message: string): boolean {
+  return /\b(?:don'?t|do not|did not|didn'?t|never|without)\s+(?:buy|buying|add|adding|order|ordering|purchase|purchasing|get|getting|put|putting)\b/i.test(
+    message.trim().toLowerCase(),
+  )
 }
 
 export function getMutationPermissionState(messages: ChatMessage[]): MutationPermissionState {
@@ -98,7 +104,7 @@ export function getMutationPermissionState(messages: ChatMessage[]): MutationPer
   const conversationAllows = hasExplicitBuyIntentInConversation(messages)
   return {
     latestUserMessage,
-    allowCartMutation: latestAllows || conversationAllows,
+    allowCartMutation: !hasExplicitNoBuyIntent(latestUserMessage) && (latestAllows || conversationAllows),
   }
 }
 
