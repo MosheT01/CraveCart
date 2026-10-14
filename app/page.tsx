@@ -919,8 +919,34 @@ function parseSseEvent(block: string): AgentStreamEvent | null {
 }
 
 function deriveVideoArtifact(trace: ToolTraceEntry): VideoArtifact | null {
-  if (trace.name !== "get_video_context" || !trace.output || typeof trace.output !== "object") return null
+  if (!trace.output || typeof trace.output !== "object") return null
   const output = trace.output as Record<string, unknown>
+
+  if (trace.name === "search_youtube_videos") {
+    const videos = Array.isArray(output.videos) ? output.videos : []
+    const video = videos[0] as Record<string, unknown> | undefined
+    if (!video || typeof video.title !== "string" || typeof video.url !== "string" || typeof video.channel !== "string") {
+      return null
+    }
+    return {
+      kind: "video",
+      video: { title: video.title, url: video.url, channel: video.channel },
+      description: typeof video.description === "string" ? video.description : undefined,
+      transcriptAvailable: Boolean(video.transcriptAvailable),
+      transcriptStatus:
+        video.transcriptStatus === "available" ||
+        video.transcriptStatus === "unavailable" ||
+        video.transcriptStatus === "blocked" ||
+        video.transcriptStatus === "error"
+          ? video.transcriptStatus
+          : undefined,
+      transcriptMessage: typeof video.transcriptMessage === "string" ? video.transcriptMessage : undefined,
+      recipeSource: "none",
+      summary: trace.summary,
+    }
+  }
+
+  if (trace.name !== "get_video_context") return null
   const video = output.video as Record<string, unknown> | undefined
   if (!video || typeof video.title !== "string" || typeof video.url !== "string" || typeof video.channel !== "string") return null
   const recipeSource =
