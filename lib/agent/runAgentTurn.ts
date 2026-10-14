@@ -54,6 +54,7 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
   const toolRuntime = new AgentToolRuntime(input.messages, input.sessionId, sessionForTurn)
   const activity: ToolTraceEntry[] = []
   const toolCallCounts = new Map<string, number>()
+  const toolNameCounts = new Map<string, number>()
   const contents: unknown[] = toGeminiContents(input.messages)
   const systemInstruction = getAgentSystemPrompt(suggestToolDomains(latestUserMessage), sessionForTurn?.userPreferences ?? null)
   let forceTextReply = false
@@ -486,6 +487,8 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
         const callKey = `${call.name}:${stableToolArguments(call.args)}`
         const callCount = (toolCallCounts.get(callKey) ?? 0) + 1
         toolCallCounts.set(callKey, callCount)
+        const toolNameCount = (toolNameCounts.get(call.name) ?? 0) + 1
+        toolNameCounts.set(call.name, toolNameCount)
         const startedTrace: ToolTraceEntry = {
           id: traceId,
           name: call.name,
@@ -499,7 +502,7 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
           trace: startedTrace,
         })
 
-        if (callCount > MAX_IDENTICAL_TOOL_CALLS) {
+        if (callCount > MAX_IDENTICAL_TOOL_CALLS || (call.name === "add_kroger_items_to_cart" && toolNameCount > 2)) {
           const summary = `Skipped repeated ${call.name} call so the request can finish.`
           const finishedTrace: ToolTraceEntry = {
             id: traceId,
