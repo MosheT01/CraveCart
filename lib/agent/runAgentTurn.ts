@@ -19,11 +19,13 @@ import {
   createEmptyAgentSessionBase,
 } from "@/lib/agent/sessionState"
 import { devLog } from "@/lib/dev"
+import { getPersistedAgentSessionState, setPersistedAgentSessionState } from "@/lib/server/chatFirestore"
 import type { AgentStreamEvent, AgentTurnResult, ChatMessage, ToolTraceEntry } from "@/lib/types"
 
 interface RunAgentTurnInput {
   messages: ChatMessage[]
   sessionId: string
+  userId?: string
 }
 
 type EventSink = (event: AgentStreamEvent) => Promise<void> | void
@@ -34,7 +36,10 @@ const MAX_IDENTICAL_TOOL_CALLS = 3
 export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = () => undefined): Promise<AgentTurnResult> {
   const latestUserMessage = input.messages[input.messages.length - 1]?.content ?? ""
 
-  let sessionForTurn = getAgentSessionState(input.sessionId)
+  let sessionForTurn = input.userId
+    ? await getPersistedAgentSessionState(input.userId, input.sessionId)
+    : getAgentSessionState(input.sessionId)
+  sessionForTurn ??= getAgentSessionState(input.sessionId)
   const voluntaryPrefs = parseUserPreferences(latestUserMessage)
   if (voluntaryPrefs) {
     const base = sessionForTurn ?? createEmptyAgentSessionBase()
@@ -597,7 +602,11 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
     })
     throw error
   } finally {
-    setAgentSessionState(input.sessionId, toolRuntime.createSessionState())
+    const nextState = toolRuntime.createSessionState()
+    setAgentSessionState(input.sessionId, nextState)
+    if (input.userId) {
+      await setPersistedAgentSessionState(input.userId, input.sessionId, nextState)
+    }
     await toolRuntime.close()
   }
 }
