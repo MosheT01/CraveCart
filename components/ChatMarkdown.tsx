@@ -18,6 +18,7 @@ function normalizeAssistantMarkdown(content: string) {
     .replace(/(^|\s)\*\s+/g, "$1\n- ")
     .replace(/\s+\*(?=[A-Z])/g, "\n- ")
     .replace(/\s+-\s+(?=\*\*)/g, "\n- ")
+    .replace(/\s+-\s+(?=\*\*|Estimated total:)/gi, "\n- ")
     .replace(/\s+(?=\d+\.\s+[A-Z])/g, "\n")
     .replace(/\s+(Would you like to (?:proceed|add|continue)\b)/gi, "\n\n$1")
     .replace(/\n{3,}/g, "\n\n")

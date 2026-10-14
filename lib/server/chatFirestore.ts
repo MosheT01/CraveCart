@@ -32,7 +32,7 @@ function chainFor(userId: string): { run: <T>(fn: () => Promise<T>) => Promise<T
       await p
       return out
     },
-  }
+    }
 }
 
 async function read(userId: string): Promise<UserChatDoc> {
@@ -108,13 +108,13 @@ export function compactForFirestore(value: any): any {
 function compactVideo(value: unknown, descriptionLimit: number) {
   if (!value || typeof value !== "object") return value
   const video = value as Record<string, unknown>
-  return {
+  return stripUndefined({
     ...video,
     video: video.video && typeof video.video === "object"
       ? { ...(video.video as Record<string, unknown>), description: typeof (video.video as Record<string, unknown>).description === "string" ? ((video.video as Record<string, unknown>).description as string).slice(0, descriptionLimit) : (video.video as Record<string, unknown>).description }
       : video.video,
     description: typeof video.description === "string" ? video.description.slice(0, descriptionLimit) : video.description,
-  }
+  })
 }
 
 function compactTraces(value: unknown[] | undefined) {
