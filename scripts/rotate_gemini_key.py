@@ -309,7 +309,7 @@ def main() -> None:
         found, old_key = update_dotenv(dotenv_path, new_key)
         if found:
             print(f"Updated {dotenv_path} and preserved the previous local GEMINI_API_KEY as a comment.")
-            if old_key == args.new_key:
+            if old_key == new_key:
                 print(f"{dotenv_path} already had the new key; no old value was preserved.")
         else:
             print(f"Added GEMINI_API_KEY to {dotenv_path}.")
