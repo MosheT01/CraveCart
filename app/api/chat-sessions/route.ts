@@ -13,6 +13,7 @@ const storedMessageSchema = z.object({
   content: z.string(),
   video: z.unknown().nullable(),
   cart: z.unknown().nullable(),
+  traces: z.array(z.unknown()).optional(),
 })
 
 const importSchema = z.object({

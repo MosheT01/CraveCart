@@ -29,6 +29,7 @@ interface RunAgentTurnInput {
 type EventSink = (event: AgentStreamEvent) => Promise<void> | void
 
 const MAX_TOOL_LOOPS = 50
+const MAX_IDENTICAL_TOOL_CALLS = 3
 
 export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = () => undefined): Promise<AgentTurnResult> {
   const latestUserMessage = input.messages[input.messages.length - 1]?.content ?? ""
@@ -47,6 +48,7 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
   const toolRuntime = new AgentToolRuntime(input.messages, input.sessionId, sessionForTurn)
   const activity: ToolTraceEntry[] = []
+  const toolCallCounts = new Map<string, number>()
   const contents: unknown[] = toGeminiContents(input.messages)
   const systemInstruction = getAgentSystemPrompt(suggestToolDomains(latestUserMessage), sessionForTurn?.userPreferences ?? null)
   let forceTextReply = false
@@ -463,6 +465,9 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
 
       for (const call of functionCalls) {
         const traceId = call.id || randomTraceId()
+        const callKey = `${call.name}:${stableToolArguments(call.args)}`
+        const callCount = (toolCallCounts.get(callKey) ?? 0) + 1
+        toolCallCounts.set(callKey, callCount)
         const startedTrace: ToolTraceEntry = {
           id: traceId,
           name: call.name,
@@ -475,6 +480,29 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
           type: "tool_call_started",
           trace: startedTrace,
         })
+
+        if (callCount > MAX_IDENTICAL_TOOL_CALLS) {
+          const summary = `Skipped repeated ${call.name} call so the request can finish.`
+          const finishedTrace: ToolTraceEntry = {
+            id: traceId,
+            name: call.name,
+            status: "finished",
+            summary,
+            arguments: call.args,
+            output: { ok: false, repeated: true, message: summary },
+          }
+          activity.push(finishedTrace)
+          await sink({ type: "tool_call_finished", trace: finishedTrace })
+          functionResponses.push({
+            functionResponse: {
+              id: call.id,
+              name: call.name,
+              response: { ok: false, repeated: true, message: summary },
+            },
+          })
+          forceTextReply = true
+          continue
+        }
 
         const outcome = await toolRuntime.execute(call.name, call.args)
         if (outcome.artifact) {
@@ -544,7 +572,19 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
       forcedShoppingContinuation = false
     }
 
-    throw new Error("The agent hit the maximum tool-call loop limit.")
+    const assistantMessage =
+      "I stopped the automated shopping steps after repeated tool calls. The progress above is the reliable part of the result; you can ask me to retry the unresolved items."
+    for (const chunk of chunkTextForStreaming(assistantMessage)) {
+      await sink({ type: "assistant_text_delta", delta: chunk })
+    }
+    return {
+      assistantMessage,
+      activity,
+      artifact: turnArtifact,
+      cart: turnCart,
+      needsAuth: false,
+      authUrl: null,
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "CraveCart hit an unexpected agent error."
     devLog("agent_error", message)
@@ -557,6 +597,10 @@ export async function runAgentTurn(input: RunAgentTurnInput, sink: EventSink = (
     setAgentSessionState(input.sessionId, toolRuntime.createSessionState())
     await toolRuntime.close()
   }
+}
+
+function stableToolArguments(args: Record<string, unknown>) {
+  return JSON.stringify(args, Object.keys(args).sort())
 }
 
 function fallbackAssistantMessage(cart: AgentTurnResult["cart"], artifact: AgentTurnResult["artifact"]) {
