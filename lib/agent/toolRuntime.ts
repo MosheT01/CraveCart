@@ -392,6 +392,9 @@ export class AgentToolRuntime {
       .join(", ")
 
     const remaining = this.getRemainingIngredientNames()
+    const pending = Array.from(this.pendingSelections.values())
+      .map((selection) => `${selection.ingredient} -> ${selection.selectedProduct} (UPC ${selection.upc}, quantity ${selection.quantity}, ${selection.modality})`)
+      .join("; ")
     const lastVideo = this.latestArtifact?.kind === "video" ? this.latestArtifact.video : this.latestCart?.video
 
     return [
@@ -404,6 +407,7 @@ export class AgentToolRuntime {
         ? `- Structured grocery ingredients are already available (${this.latestExtractedRecipe.ingredients.filter((ingredient) => !ingredient.pantryItem).length} non-pantry ingredients).`
         : "",
       ingredientPreview ? `- Known grocery ingredients: ${ingredientPreview}.` : "",
+      pending ? `- Saved Kroger selections ready to add: ${pending}.` : "",
       remaining.length > 0 ? `- Ingredients still not searched or resolved: ${remaining.join(", ")}.` : "",
       this.latestCart
         ? `- Last cart status: ${this.latestCart.status} with ${this.latestCart.itemsAdded} matched items and unmatched ingredients: ${this.latestCart.unmatchedIngredients.join(", ") || "none"}.`
@@ -426,13 +430,21 @@ export class AgentToolRuntime {
         ? `Video context:\n${this.latestArtifact.summary}`
         : "Use the recipe or video context already in the conversation."
 
+    const hasCompletePendingSelections = remainingIngredients.length === 0 && this.pendingSelections.size > 0
+
     return [
       "Server note: the user explicitly asked you to buy groceries in this same turn, and you have not completed the grocery workflow yet.",
       "Continue now. Do not ask whether to proceed.",
       context,
-      "First call extract_recipe_ingredients so you have structured ingredients with quantities and units.",
-      "Skip pantry staples, search Kroger for the remaining items, preserve the extracted quantity/unit when you call search_kroger_products, and add enough package quantity to cover the recipe.",
-      "Search all remaining grocery ingredients first, then call add_kroger_items_to_cart once at the end with the full matched batch.",
+      hasCompletePendingSelections
+        ? "All grocery ingredients already have saved Kroger selections from the previous turn. Call add_kroger_items_to_cart directly with those saved selections; do not repeat extract_recipe_ingredients or search_kroger_products."
+        : "First call extract_recipe_ingredients so you have structured ingredients with quantities and units.",
+      hasCompletePendingSelections
+        ? "Use every saved pending selection, preserving its UPC and retail quantity, and add the full batch once."
+        : "Skip pantry staples, search Kroger for the remaining items, preserve the extracted quantity/unit when you call search_kroger_products, and add enough package quantity to cover the recipe.",
+      hasCompletePendingSelections
+        ? "Do not search Kroger again unless a saved selection is missing a UPC."
+        : "Search all remaining grocery ingredients first, then call add_kroger_items_to_cart once at the end with the full matched batch.",
       "If a match is weak or absurd, leave that ingredient unmatched instead of forcing a bad product.",
     ].join("\n\n")
   }
@@ -984,13 +996,18 @@ export class AgentToolRuntime {
       }
     }
 
+    const pendingByUpc = new Map(Array.from(this.pendingSelections.values()).map((selection) => [selection.upc, selection]))
     const requestItems = rawItems
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-      .map((item) => ({
-        upc: String(item.upc ?? ""),
-        quantity: normalizeCartQuantity(item.quantity),
-        modality: item.modality === "DELIVERY" ? "DELIVERY" : "PICKUP",
-      }))
+      .map((item) => {
+        const upc = String(item.upc ?? "")
+        const pending = pendingByUpc.get(upc)
+        return {
+          upc,
+          quantity: pending?.quantity ?? normalizeCartQuantity(item.quantity),
+          modality: pending?.modality ?? (item.modality === "DELIVERY" ? "DELIVERY" : "PICKUP"),
+        }
+      })
       .filter((item) => item.upc)
 
     const result = await this.mcpClients.callKrogerTool<KrogerCartAddResult>("add_kroger_items_to_cart", {
@@ -1017,16 +1034,18 @@ export class AgentToolRuntime {
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .filter((item) => resultByUpc.get(String(item.upc ?? ""))?.success)
       .map((item) => {
-        const quantity = requestByUpc.get(String(item.upc ?? ""))?.quantity ?? normalizeCartQuantity(item.quantity)
-        const unitPrice = Number(item.priceValue ?? 0) || 0
+        const upc = String(item.upc ?? "")
+        const pending = pendingByUpc.get(upc)
+        const quantity = requestByUpc.get(upc)?.quantity ?? normalizeCartQuantity(item.quantity)
+        const unitPrice = pending?.priceValue ?? (Number(item.priceValue ?? 0) || 0)
 
         return {
-          ingredient: String(item.ingredient ?? item.selectedProduct ?? "ingredient"),
-          selectedProduct: String(item.selectedProduct ?? "Kroger item"),
+          ingredient: pending?.ingredient ?? String(item.ingredient ?? item.selectedProduct ?? "ingredient"),
+          selectedProduct: pending?.selectedProduct ?? String(item.selectedProduct ?? "Kroger item"),
           quantity,
-          unit: typeof item.unit === "string" && item.unit.trim() ? item.unit : "unit",
+          unit: pending?.unit ?? (typeof item.unit === "string" && item.unit.trim() ? item.unit : "unit"),
           price: formatUsd(unitPrice * quantity),
-          upc: String(item.upc ?? ""),
+          upc,
         }
       })
 

@@ -794,17 +794,17 @@ export default function HomePage() {
                       </div>
                     </div>
 
+                    {message.video && (
+                      <div className="mt-4">
+                        <VideoResultCard video={message.video} />
+                      </div>
+                    )}
                     {message.role === "assistant" && (
                       <div className="mt-2.5">
                         <AgentActivityPanel
                           traces={message.traces}
                           isStreaming={message.status === "streaming"}
                         />
-                      </div>
-                    )}
-                    {message.video && (
-                      <div className="mt-4">
-                        <VideoResultCard video={message.video} />
                       </div>
                     )}
                     {message.cart && (
