@@ -4,6 +4,7 @@ import {
   getMutationPermissionState,
   hasExplicitBuyIntent,
   hasExplicitBuyIntentInConversation,
+  hasExplicitNoBuyIntent,
   isCartStatusFollowup,
   isVideoContextFollowup,
   shouldUseCarryoverContext,
@@ -46,6 +47,17 @@ describe("agent intent guard", () => {
     expect(hasExplicitBuyIntent("how do I make pasta")).toBe(false)
     expect(hasExplicitBuyIntent("prepare the ingredients, but don't add anything to my cart")).toBe(false)
     expect(hasExplicitBuyIntent("find the groceries without buying them")).toBe(false)
+    expect(hasExplicitNoBuyIntent("don't add anything to my cart")).toBe(true)
+  })
+
+  it("lets an explicit latest-turn no-buy override an older buy request", () => {
+    const messages: ChatMessage[] = [
+      { role: "user", content: "find a burger video and buy the groceries" },
+      { role: "assistant", content: "I found the ingredients." },
+      { role: "user", content: "prepare them, but don't add anything to my cart" },
+    ]
+
+    expect(getMutationPermissionState(messages).allowCartMutation).toBe(false)
   })
 
   it("suggests the correct tool domains", () => {
