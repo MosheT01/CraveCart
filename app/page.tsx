@@ -767,7 +767,7 @@ export default function HomePage() {
                     key={message.id}
                     className={message.role === "user" ? "ml-auto max-w-xl" : "mr-auto w-full max-w-full"}
                   >
-                    {(message.role === "user" || message.content || message.status === "streaming") && (
+                    {(message.role === "user" || message.content.trim() || message.status === "streaming") && (
                       <div
                         className={
                           message.role === "user"
